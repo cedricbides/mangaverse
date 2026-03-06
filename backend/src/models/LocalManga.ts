@@ -1,48 +1,41 @@
-import { Router, Request, Response } from 'express'
-import LocalManga from '../models/LocalManga'
-import LocalChapter from '../models/LocalChapter'
-import MangaDexManualChapter from '../models/MangaDexManualChapter'
+import mongoose, { Schema, Document } from 'mongoose'
 
-const router = Router()
+export interface ILocalManga extends Document {
+  title: string
+  altTitle?: string
+  coverUrl?: string
+  description?: string
+  genres: string[]
+  status: string
+  author?: string
+  artist?: string
+  year?: number
+  slug: string
+  featured: boolean
+  views: number
+  createdAt: Date
+  updatedAt: Date
+}
 
-// Get all local manga (public)
-router.get('/', async (_req: Request, res: Response) => {
-  const list = await LocalManga.find().sort({ updatedAt: -1 })
-  res.json(list)
-})
+const LocalMangaSchema = new Schema<ILocalManga>(
+  {
+    title: { type: String, required: true },
+    altTitle: { type: String },
+    coverUrl: { type: String },
+    description: { type: String },
+    genres: [{ type: String }],
+    status: { type: String, default: 'ongoing' },
+    author: { type: String },
+    artist: { type: String },
+    year: { type: Number },
+    slug: { type: String, required: true, unique: true },
+    featured: { type: Boolean, default: false },
+    views: { type: Number, default: 0 },
+  },
+  { timestamps: true }
+)
 
-// Get single manga
-router.get('/:slug', async (req: Request, res: Response) => {
-  const manga = await LocalManga.findOne({ slug: req.params.slug })
-  if (!manga) {
-    const byId = await LocalManga.findById(req.params.slug)
-    if (!byId) return res.status(404).json({ error: 'Not found' })
-    return res.json(byId)
-  }
-  // increment views
-  manga.views += 1
-  await manga.save()
-  res.json(manga)
-})
+LocalMangaSchema.index({ slug: 1 }, { unique: true })
+LocalMangaSchema.index({ createdAt: -1 })
 
-// Get chapters for a manga
-router.get('/:id/chapters', async (req: Request, res: Response) => {
-  const chapters = await LocalChapter.find({ mangaId: req.params.id }).sort({ chapterNumber: 1 })
-  res.json(chapters)
-})
-
-// Get single chapter by ID
-router.get('/chapter/:chapterId', async (req: Request, res: Response) => {
-  const chapter = await LocalChapter.findById(req.params.chapterId).populate('mangaId')
-  if (!chapter) return res.status(404).json({ error: 'Not found' })
-  res.json(chapter)
-})
-
-// Get single MangaDex manual chapter by ID (public, for reader)
-router.get('/manual-chapter/:chapterId', async (req: Request, res: Response) => {
-  const chapter = await MangaDexManualChapter.findById(req.params.chapterId)
-  if (!chapter) return res.status(404).json({ error: 'Not found' })
-  res.json(chapter)
-})
-
-export default router
+export default mongoose.model<ILocalManga>('LocalManga', LocalMangaSchema)

@@ -2,11 +2,18 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   Shield, Plus, Edit3, Trash2, BookOpen, Users, Layers,
-  ChevronDown, ChevronUp, X, Check, AlertCircle, Image, List
+  ChevronDown, ChevronUp, X, Check, AlertCircle, Image, List, Upload, Loader
 } from 'lucide-react'
 import axios from 'axios'
 import { useAuth } from '@/context/AuthContext'
 import type { LocalManga, LocalChapter } from '@/types'
+
+/** Route external image URLs through our backend proxy to bypass CORS/hotlink blocks */
+function proxyUrl(url: string): string {
+  if (!url) return url
+  if (url.startsWith('/') || url.startsWith(window.location.origin)) return url
+  return `/api/proxy/image?url=${encodeURIComponent(url)}`
+}
 
 const GENRES = [
   'Action','Adventure','Comedy','Drama','Fantasy','Horror','Mystery',
@@ -478,12 +485,119 @@ function ChapterFormModal({ mangaId, onClose, onSave }: {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [previewMode, setPreviewMode] = useState<'text' | 'grid'>('text')
+  const [inputTab, setInputTab] = useState<'mdx' | 'url' | 'upload'>('mdx')
+  const [uploadedPages, setUploadedPages] = useState<string[]>([])
+  const [uploading, setUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState('')
+  const [dragOver, setDragOver] = useState(false)
+  const [mdxMangaUrl, setMdxMangaUrl] = useState('')
+  const [mdxFetching, setMdxFetching] = useState(false)
+  const [mdxChapterList, setMdxChapterList] = useState<any[]>([])
+  const [mdxSelected, setMdxSelected] = useState<Set<string>>(new Set())
 
-  const pages = pagesText.split('\n').map(l => l.trim()).filter(Boolean)
+  const handleMdxFetchChapters = async () => {
+    setError('')
+    const trimmed = mdxMangaUrl.trim()
+    const uuidMatch = trimmed.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i)
+    const mangaId = uuidMatch?.[1]
+    if (!mangaId) { setError('Could not find a manga ID in that URL. Paste the MangaDex manga page URL.'); return }
+    setMdxFetching(true)
+    setMdxChapterList([])
+    setMdxSelected(new Set())
+    try {
+      const res = await axios.get(`/api/mangadex/manga-chapters/${mangaId}`)
+      setMdxChapterList(res.data)
+    } catch (err: any) {
+      setError('Failed to fetch chapters from MangaDex')
+    } finally {
+      setMdxFetching(false)
+    }
+  }
+
+  const toggleMdxChapter = (id: string) => {
+    setMdxSelected(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  // Combine URL pages + uploaded pages
+  const urlPages = pagesText.split('\n').map(l => l.trim()).filter(Boolean)
+  const pages = inputTab === 'url' ? urlPages : inputTab === 'upload' ? uploadedPages : []
+
+  const handleUploadFiles = async (files: FileList | File[]) => {
+    const fileArr = Array.from(files).filter(f => f.type.startsWith('image/'))
+    if (fileArr.length === 0) { setError('Please select image files only'); return }
+
+    setUploading(true)
+    setError('')
+    setUploadProgress(`Uploading 0 / ${fileArr.length}…`)
+
+    try {
+      // Upload in batches of 10
+      const batchSize = 10
+      const allUrls: string[] = []
+      for (let i = 0; i < fileArr.length; i += batchSize) {
+        const batch = fileArr.slice(i, i + batchSize)
+        const formData = new FormData()
+        batch.forEach(f => formData.append('pages', f))
+        const res = await axios.post('/api/upload/pages', formData, {
+          withCredentials: true,
+          headers: { 'Content-Type': 'multipart/form-data' },
+        })
+        allUrls.push(...res.data.urls)
+        setUploadProgress(`Uploading ${Math.min(i + batchSize, fileArr.length)} / ${fileArr.length}…`)
+      }
+      // Sort by filename so pages are in order
+      allUrls.sort()
+      setUploadedPages(prev => [...prev, ...allUrls])
+      setUploadProgress('')
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Upload failed')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const removeUploadedPage = (idx: number) => {
+    setUploadedPages(prev => prev.filter((_, i) => i !== idx))
+  }
+
+  const movePage = (from: number, to: number) => {
+    setUploadedPages(prev => {
+      const arr = [...prev]
+      const [item] = arr.splice(from, 1)
+      arr.splice(to, 0, item)
+      return arr
+    })
+  }
 
   const handleSave = async () => {
+    // MangaDex bulk import mode
+    if (inputTab === 'mdx') {
+      if (mdxSelected.size === 0) { setError('Select at least one chapter to import'); return }
+      setSaving(true)
+      try {
+        for (const ch of mdxChapterList.filter(c => mdxSelected.has(c.id))) {
+          await onSave({
+            chapterNumber: ch.chapter || '?',
+            title: ch.title || '',
+            volume: ch.volume || '',
+            pages: [],           // empty — reader fetches fresh URLs via mdxChapterId
+            language: 'en',
+            mdxChapterId: ch.id,
+          })
+        }
+      } catch (err: any) {
+        setError(err.response?.data?.error || 'Failed to save')
+        setSaving(false)
+      }
+      return
+    }
+    // URL / Upload mode
     if (!chapterNumber.trim()) { setError('Chapter number is required'); return }
-    if (pages.length === 0) { setError('Add at least one page image URL'); return }
+    if (pages.length === 0) { setError('Add at least one page image'); return }
     setSaving(true)
     try {
       await onSave({ chapterNumber, title, volume, pages, language: 'en' })
@@ -503,6 +617,7 @@ function ChapterFormModal({ mangaId, onClose, onSave }: {
           </button>
         </div>
 
+        {/* Chapter meta fields */}
         <div className="flex flex-col gap-4">
           <div className="grid grid-cols-3 gap-3">
             <div>
@@ -522,42 +637,169 @@ function ChapterFormModal({ mangaId, onClose, onSave }: {
             </div>
           </div>
 
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <label className="text-xs text-text-muted font-body uppercase tracking-widest">
-                Page Image URLs * ({pages.length} pages)
-              </label>
-              <div className="flex gap-1">
-                <button onClick={() => setPreviewMode('text')}
-                  className={`p-1.5 rounded-lg transition-colors ${previewMode === 'text' ? 'text-primary' : 'text-text-muted'}`}>
-                  <List size={13} />
-                </button>
-                <button onClick={() => setPreviewMode('grid')}
-                  className={`p-1.5 rounded-lg transition-colors ${previewMode === 'grid' ? 'text-primary' : 'text-text-muted'}`}>
-                  <Image size={13} />
-                </button>
-              </div>
-            </div>
-            {previewMode === 'text' ? (
-              <textarea value={pagesText} onChange={e => setPagesText(e.target.value)} rows={8}
-                placeholder={"One image URL per line:\nhttps://example.com/page1.jpg\nhttps://example.com/page2.jpg\n..."}
-                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-text font-body outline-none focus:border-primary/40 resize-none font-mono text-xs" />
-            ) : (
-              <div className="grid grid-cols-4 gap-2 max-h-64 overflow-y-auto p-2 bg-white/5 rounded-xl">
-                {pages.length === 0
-                  ? <p className="col-span-4 text-xs text-text-muted text-center py-6 font-body">No pages yet</p>
-                  : pages.map((url, i) => (
-                    <div key={i} className="relative">
-                      <img src={url} alt={`Page ${i+1}`} className="w-full h-20 object-cover rounded-lg"
-                        onError={e => { e.currentTarget.src = 'https://placehold.co/80x112/1a1a2e/red?text=ERR' }} />
-                      <span className="absolute bottom-1 right-1 text-xs bg-black/60 text-white px-1 rounded">{i+1}</span>
-                    </div>
-                  ))
-                }
-              </div>
-            )}
-            <p className="text-xs text-text-muted font-body mt-1.5">Paste one image URL per line. Supports any direct image URL.</p>
+          {/* Tab switcher: MangaDex / URL / Upload */}
+          <div className="flex gap-1 bg-white/5 rounded-xl p-1">
+            <button
+              onClick={() => setInputTab('mdx')}
+              className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-body transition-all ${inputTab === 'mdx' ? 'bg-primary text-white' : 'text-text-muted hover:text-text'}`}>
+              <BookOpen size={13} /> MangaDex
+            </button>
+            <button
+              onClick={() => setInputTab('url')}
+              className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-body transition-all ${inputTab === 'url' ? 'bg-primary text-white' : 'text-text-muted hover:text-text'}`}>
+              <List size={13} /> URL Import
+            </button>
+            <button
+              onClick={() => setInputTab('upload')}
+              className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-body transition-all ${inputTab === 'upload' ? 'bg-primary text-white' : 'text-text-muted hover:text-text'}`}>
+              <Upload size={13} /> Upload Files
+            </button>
           </div>
+
+          {/* MangaDex Import Tab */}
+          {inputTab === 'mdx' && (
+            <div className="flex flex-col gap-3">
+              <label className="text-xs text-text-muted font-body uppercase tracking-widest">MangaDex Manga URL</label>
+              <div className="flex gap-2">
+                <input
+                  value={mdxMangaUrl}
+                  onChange={e => { setMdxMangaUrl(e.target.value); setMdxChapterList([]); setMdxSelected(new Set()) }}
+                  placeholder="https://mangadex.org/title/32d76d19-.../manga-name"
+                  className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-text font-body outline-none focus:border-primary/40 font-mono text-xs"
+                />
+                <button
+                  onClick={handleMdxFetchChapters}
+                  disabled={mdxFetching || !mdxMangaUrl.trim()}
+                  className="px-4 py-2.5 bg-primary hover:bg-primary/90 text-white text-sm font-body rounded-xl disabled:opacity-50 flex items-center gap-2 transition-all whitespace-nowrap">
+                  {mdxFetching ? <><Loader size={13} className="animate-spin" /> Loading...</> : <><BookOpen size={13} /> Load Chapters</>}
+                </button>
+              </div>
+              <p className="text-xs text-text-muted font-body">Paste the MangaDex manga page URL. Select chapters to import — pages are fetched live when reading, so they never expire.</p>
+
+              {mdxChapterList.length > 0 && (
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs text-text-muted font-body uppercase tracking-widest">{mdxChapterList.length} chapters found</span>
+                    <div className="flex gap-3">
+                      <button onClick={() => setMdxSelected(new Set(mdxChapterList.map(c => c.id)))}
+                        className="text-xs text-primary hover:text-primary/80 font-body">Select all</button>
+                      <button onClick={() => setMdxSelected(new Set())}
+                        className="text-xs text-text-muted hover:text-text font-body">Clear</button>
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-1 max-h-56 overflow-y-auto pr-1">
+                    {mdxChapterList.map(ch => (
+                      <label key={ch.id}
+                        className={`flex items-center gap-3 px-3 py-2 rounded-xl cursor-pointer transition-all ${mdxSelected.has(ch.id) ? 'bg-primary/20 border border-primary/30' : 'bg-white/5 border border-transparent hover:bg-white/10'}`}>
+                        <input type="checkbox" checked={mdxSelected.has(ch.id)} onChange={() => toggleMdxChapter(ch.id)} className="accent-primary" />
+                        <span className="text-sm text-white font-body font-medium w-16 shrink-0">Ch. {ch.chapter}</span>
+                        <span className="text-xs text-text-muted font-body truncate flex-1">{ch.title || '—'}</span>
+                        <span className="text-xs text-text-muted font-mono shrink-0">{ch.pages}p</span>
+                      </label>
+                    ))}
+                  </div>
+                  {mdxSelected.size > 0 && (
+                    <p className="text-xs text-green-400 font-body mt-2">✓ {mdxSelected.size} chapter{mdxSelected.size > 1 ? 's' : ''} selected</p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* URL Tab */}
+          {inputTab === 'url' && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs text-text-muted font-body uppercase tracking-widest">
+                  Page Image URLs * ({urlPages.length} pages)
+                </label>
+                <div className="flex gap-1">
+                  <button onClick={() => setPreviewMode('text')}
+                    className={`p-1.5 rounded-lg transition-colors ${previewMode === 'text' ? 'text-primary' : 'text-text-muted'}`}>
+                    <List size={13} />
+                  </button>
+                  <button onClick={() => setPreviewMode('grid')}
+                    className={`p-1.5 rounded-lg transition-colors ${previewMode === 'grid' ? 'text-primary' : 'text-text-muted'}`}>
+                    <Image size={13} />
+                  </button>
+                </div>
+              </div>
+              {previewMode === 'text' ? (
+                <textarea value={pagesText} onChange={e => setPagesText(e.target.value)} rows={8}
+                  placeholder={"One image URL per line:\nhttps://example.com/page1.jpg\nhttps://example.com/page2.jpg\n..."}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-text font-body outline-none focus:border-primary/40 resize-none font-mono text-xs" />
+              ) : (
+                <div className="grid grid-cols-4 gap-2 max-h-64 overflow-y-auto p-2 bg-white/5 rounded-xl">
+                  {urlPages.length === 0
+                    ? <p className="col-span-4 text-xs text-text-muted text-center py-6 font-body">No pages yet</p>
+                    : urlPages.map((url, i) => (
+                      <div key={i} className="relative">
+                        <img src={proxyUrl(url)} alt={`Page ${i+1}`} className="w-full h-20 object-cover rounded-lg"
+                          onError={e => { e.currentTarget.src = 'https://placehold.co/80x112/1a1a2e/red?text=ERR' }} />
+                        <span className="absolute bottom-1 right-1 text-xs bg-black/60 text-white px-1 rounded">{i+1}</span>
+                      </div>
+                    ))
+                  }
+                </div>
+              )}
+              <p className="text-xs text-text-muted font-body mt-1.5">Paste one image URL per line. Note: some hosts block hotlinking — use Upload Files instead.</p>
+            </div>
+          )}
+
+          {/* Upload Tab */}
+          {inputTab === 'upload' && (
+            <div className="flex flex-col gap-3">
+              {/* Drop zone */}
+              <label
+                onDragOver={e => { e.preventDefault(); setDragOver(true) }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={e => { e.preventDefault(); setDragOver(false); handleUploadFiles(e.dataTransfer.files) }}
+                className={`flex flex-col items-center justify-center gap-2 border-2 border-dashed rounded-2xl py-8 cursor-pointer transition-all ${dragOver ? 'border-primary bg-primary/10' : 'border-white/10 hover:border-primary/40 hover:bg-white/5'}`}>
+                {uploading ? (
+                  <>
+                    <Loader size={24} className="text-primary animate-spin" />
+                    <span className="text-sm text-text-muted font-body">{uploadProgress}</span>
+                  </>
+                ) : (
+                  <>
+                    <Upload size={24} className="text-text-muted" />
+                    <span className="text-sm text-text font-body">Drop images here or <span className="text-primary">browse</span></span>
+                    <span className="text-xs text-text-muted font-body">PNG, JPG, WEBP — up to 10MB each</span>
+                  </>
+                )}
+                <input type="file" multiple accept="image/*" className="hidden"
+                  onChange={e => e.target.files && handleUploadFiles(e.target.files)} disabled={uploading} />
+              </label>
+
+              {/* Uploaded pages grid */}
+              {uploadedPages.length > 0 && (
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-xs text-text-muted font-body uppercase tracking-widest">{uploadedPages.length} pages uploaded</label>
+                    <button onClick={() => setUploadedPages([])} className="text-xs text-red-400 hover:text-red-300 font-body">Clear all</button>
+                  </div>
+                  <div className="grid grid-cols-4 gap-2 max-h-64 overflow-y-auto p-2 bg-white/5 rounded-xl">
+                    {uploadedPages.map((url, i) => (
+                      <div key={url} className="relative group">
+                        <img src={url} alt={`Page ${i+1}`} className="w-full h-20 object-cover rounded-lg"
+                          onError={e => { e.currentTarget.src = 'https://placehold.co/80x112/1a1a2e/red?text=ERR' }} />
+                        <span className="absolute bottom-1 left-1 text-xs bg-black/60 text-white px-1 rounded">{i+1}</span>
+                        <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg flex items-center justify-center gap-1">
+                          <button onClick={() => i > 0 && movePage(i, i - 1)}
+                            className="p-1 bg-white/20 hover:bg-white/40 rounded text-white text-xs disabled:opacity-30" disabled={i === 0}>↑</button>
+                          <button onClick={() => removeUploadedPage(i)}
+                            className="p-1 bg-red-500/60 hover:bg-red-500 rounded text-white"><X size={10} /></button>
+                          <button onClick={() => i < uploadedPages.length - 1 && movePage(i, i + 1)}
+                            className="p-1 bg-white/20 hover:bg-white/40 rounded text-white text-xs disabled:opacity-30" disabled={i === uploadedPages.length - 1}>↓</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-xs text-text-muted font-body mt-1.5">Hover pages to reorder ↑↓ or remove ✕</p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {error && (
@@ -570,9 +812,9 @@ function ChapterFormModal({ mangaId, onClose, onSave }: {
           <button onClick={onClose} className="px-5 py-2.5 glass border border-white/10 rounded-xl text-sm font-body text-text-muted hover:text-text transition-colors">
             Cancel
           </button>
-          <button onClick={handleSave} disabled={saving}
+          <button onClick={handleSave} disabled={saving || uploading}
             className="px-5 py-2.5 bg-primary hover:bg-primary/90 text-white text-sm font-body rounded-xl disabled:opacity-50 flex items-center gap-2 transition-all">
-            {saving ? 'Saving...' : <><Check size={14} /> Add Chapter ({pages.length} pages)</>}
+            {saving ? 'Saving...' : inputTab === 'mdx' ? <><Check size={14} /> Import {mdxSelected.size} Chapter{mdxSelected.size !== 1 ? 's' : ''}</> : <><Check size={14} /> Add Chapter ({pages.length} pages)</>}
           </button>
         </div>
       </div>

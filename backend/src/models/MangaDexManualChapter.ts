@@ -1,14 +1,16 @@
 import mongoose, { Schema, Document } from 'mongoose'
 
 export interface IMangaDexManualChapter extends Document {
-  mangaDexId: string       // MangaDex manga ID this chapter belongs to
+  mangaDexId: string
+  mdxChapterId?: string
   chapterNumber: string
   title?: string
   volume?: string
-  pages: string[]          // array of image URLs
+  pages: string[]
   language: string
-  uploadedBy: string       // admin user id
-  source: 'manual'
+  uploadedBy: string
+  source: 'manual' | 'mangadex'
+  published: boolean      // true = visible to all users, false = admin only
   createdAt: Date
   updatedAt: Date
 }
@@ -16,6 +18,7 @@ export interface IMangaDexManualChapter extends Document {
 const MangaDexManualChapterSchema = new Schema(
   {
     mangaDexId:    { type: String, required: true, index: true },
+    mdxChapterId:  { type: String, index: true },
     chapterNumber: { type: String, required: true },
     title:         { type: String },
     volume:        { type: String },
@@ -23,6 +26,7 @@ const MangaDexManualChapterSchema = new Schema(
     language:      { type: String, default: 'en' },
     uploadedBy:    { type: String },
     source:        { type: String, default: 'manual' },
+    published:     { type: Boolean, default: false },  // draft by default
   },
   { timestamps: true }
 )

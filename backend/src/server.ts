@@ -6,6 +6,7 @@ import MongoStore from 'connect-mongo'
 import passport from 'passport'
 import mongoose from 'mongoose'
 import dotenv from 'dotenv'
+import path from 'path'
 import rateLimit from 'express-rate-limit'
 import { configurePassport } from './config/passport'
 import authRoutes from './routes/auth'
@@ -13,10 +14,13 @@ import favRoutes from './routes/favorites'
 import adminRoutes from './routes/admin'
 import localMangaRoutes from './routes/localManga'
 import mangadexRoutes from './routes/mangadex'
+import uploadRoutes from './routes/upload'
+import proxyRoutes from './routes/proxy'
 
 dotenv.config()
 
 const app = express()
+app.set('etag', false)  // disable ETags to prevent stale 304 responses
 const PORT = process.env.PORT || 5000
 const MONGO_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/mangaverse'
 
@@ -27,6 +31,7 @@ app.use(cors({
   credentials: true,
 }))
 app.use(express.json({ limit: '10mb' }))
+app.use('/uploads', express.static(path.join(__dirname, '../public/uploads')))
 
 // ─── Rate Limiters ────────────────────────────────────────────────────────────
 const registerLimiter = rateLimit({
@@ -70,6 +75,8 @@ app.use('/api/favorites', favRoutes)
 app.use('/api/admin', adminRoutes)
 app.use('/api/local-manga', localMangaRoutes)
 app.use('/api/mangadex', mangadexRoutes)
+app.use('/api/upload', uploadRoutes)
+app.use('/api/proxy', proxyRoutes)
 
 // ─── DB + Start ──────────────────────────────────────────────────────────────
 mongoose.connect(MONGO_URI)

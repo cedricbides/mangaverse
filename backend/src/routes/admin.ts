@@ -95,17 +95,18 @@ router.get('/mangadex/:mangaDexId/chapters', async (req: Request, res: Response)
 // POST add a manual chapter to a MangaDex manga
 router.post('/mangadex/:mangaDexId/chapters', async (req: Request, res: Response) => {
   try {
-    const { chapterNumber, title, volume, pages, language } = req.body
+    const { chapterNumber, title, volume, pages, language, mdxChapterId } = req.body
     const user = req.user as IUser | undefined
     const chapter = await MangaDexManualChapter.create({
       mangaDexId: req.params.mangaDexId,
+      mdxChapterId: mdxChapterId || null,
       chapterNumber,
       title,
       volume,
       pages: pages || [],
       language: language || 'en',
       uploadedBy: user?.id || 'admin',
-      source: 'manual',
+      source: mdxChapterId ? 'mangadex' : 'manual',
     })
     res.status(201).json(chapter)
   } catch (err: any) {
@@ -133,6 +134,30 @@ router.delete('/mangadex/chapters/:chapterId', async (req: Request, res: Respons
   try {
     await MangaDexManualChapter.findByIdAndDelete(req.params.chapterId)
     res.json({ success: true })
+  } catch (err: any) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// POST bulk delete manual chapters
+router.post('/mangadex/chapters/bulk-delete', async (req: Request, res: Response) => {
+  try {
+    const { ids } = req.body
+    if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: 'ids required' })
+    await MangaDexManualChapter.deleteMany({ _id: { $in: ids } })
+    res.json({ success: true, deleted: ids.length })
+  } catch (err: any) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// POST bulk publish/unpublish manual chapters
+router.post('/mangadex/chapters/bulk-publish', async (req: Request, res: Response) => {
+  try {
+    const { ids, published } = req.body
+    if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: 'ids required' })
+    await MangaDexManualChapter.updateMany({ _id: { $in: ids } }, { published: !!published })
+    res.json({ success: true, updated: ids.length })
   } catch (err: any) {
     res.status(500).json({ error: err.message })
   }

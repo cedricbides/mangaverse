@@ -44,4 +44,16 @@ router.get('/:id/chapters', async (req: Request, res: Response) => {
   res.json(chapters)
 })
 
+// GET published manual chapters for a MangaDex manga (public)
+router.get('/manual-chapters/:mangaDexId', async (req, res) => {
+  try {
+    const chapters = await (await import('../models/MangaDexManualChapter')).default
+      .find({ mangaDexId: req.params.mangaDexId, published: true })
+      .sort({ chapterNumber: 1 })
+    res.json(chapters)
+  } catch (err: any) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 export default router

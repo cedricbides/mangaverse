@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { Heart, BookOpen, Star, Calendar, Tag, Plus, Trash2, X, Upload } from 'lucide-react'
+import { Heart, BookOpen, Star, Calendar, Tag, Plus, Trash2, X, Upload, CheckSquare, Square, Eye, EyeOff } from 'lucide-react'
 import axios from 'axios'
 import type { Manga, Chapter } from '@/types'
 import { getCoverUrl, getMangaTitle, getMangaDescription, getMangaTags, getStatusColor, formatChapter } from '@/utils/manga'
@@ -18,7 +18,8 @@ interface ManualChapter {
   volume?: string
   pages: string[]
   language: string
-  source: 'manual'
+  source: 'manual' | 'mangadex'
+  published: boolean
   createdAt: string
 }
 
@@ -37,79 +38,58 @@ function AddChapterModal({
   onClose: () => void
   onAdded: (ch: ManualChapter) => void
 }) {
-  const [form, setForm] = useState({
-    chapterNumber: '',
-    title: '',
-    volume: '',
-    language: 'en',
-    pages: '',
-  })
-  const [mdUrl, setMdUrl] = useState('')
-  const [importing, setImporting] = useState(false)
-  const [importSuccess, setImportSuccess] = useState(false)
+  const [mangaUrl, setMangaUrl] = useState('')
+  const [fetching, setFetching] = useState(false)
+  const [chapterList, setChapterList] = useState<any[]>([])
+  const [selected, setSelected] = useState<Set<string>>(new Set())
   const [saving, setSaving] = useState(false)
+  const [savedCount, setSavedCount] = useState(0)
   const [error, setError] = useState('')
 
-  const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }))
-
-  // Extract chapter ID from MangaDex URL or raw ID
-  const extractChapterId = (input: string): string | null => {
-    const match = input.match(/chapter\/([a-f0-9-]{36})/)
-    if (match) return match[1]
-    if (/^[a-f0-9-]{36}$/.test(input.trim())) return input.trim()
-    return null
-  }
-
-  const handleImport = async () => {
-    const chapterId = extractChapterId(mdUrl)
-    if (!chapterId) return setError('Invalid MangaDex chapter URL or ID.')
-    setImporting(true)
+  const handleFetchChapters = async () => {
     setError('')
-    setImportSuccess(false)
+    const uuidMatch = mangaUrl.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i)
+    const id = uuidMatch?.[1]
+    if (!id) { setError('Could not find a manga ID. Paste the full MangaDex manga page URL.'); return }
+    setFetching(true)
+    setChapterList([])
+    setSelected(new Set())
     try {
-      const MD = 'https://api.mangadex.org'
-      const [metaRes, serverRes] = await Promise.all([
-        axios.get(`${MD}/chapter/${chapterId}`),
-        axios.get(`${MD}/at-home/server/${chapterId}`),
-      ])
-      const attr = metaRes.data.data.attributes
-      const { baseUrl, chapter } = serverRes.data
-      const pages = chapter.data.map(
-        (file: string) => `${baseUrl}/data/${chapter.hash}/${file}`
-      )
-      setForm({
-        chapterNumber: attr.chapter || '',
-        title: attr.title || '',
-        volume: attr.volume || '',
-        language: attr.translatedLanguage || 'en',
-        pages: pages.join('\n'),
-      })
-      setImportSuccess(true)
+      const res = await axios.get(`/api/mangadex/manga-chapters/${id}`)
+      setChapterList(res.data)
     } catch {
-      setError('Failed to fetch chapter from MangaDex.')
+      setError('Failed to load chapters from MangaDex.')
     } finally {
-      setImporting(false)
+      setFetching(false)
     }
   }
 
-  const handleSubmit = async () => {
-    if (!form.chapterNumber.trim()) return setError('Chapter number is required.')
+  const toggle = (id: string) => setSelected(prev => {
+    const next = new Set(prev)
+    next.has(id) ? next.delete(id) : next.add(id)
+    return next
+  })
+
+  const handleImport = async () => {
+    if (selected.size === 0) { setError('Select at least one chapter.'); return }
     setSaving(true)
+    setSavedCount(0)
     setError('')
     try {
-      const pages = form.pages
-        .split('\n')
-        .map((l) => l.trim())
-        .filter(Boolean)
-      const res = await axios.post(
-        `/api/admin/mangadex/${mangaDexId}/chapters`,
-        { ...form, pages },
-        { withCredentials: true }
-      )
-      onAdded(res.data)
+      let count = 0
+      for (const ch of chapterList.filter(c => selected.has(c.id))) {
+        const res = await axios.post(
+          `/api/admin/mangadex/${mangaDexId}/chapters`,
+          { chapterNumber: ch.chapter || '?', title: ch.title || '', volume: ch.volume || '', pages: [], language: 'en', mdxChapterId: ch.id },
+          { withCredentials: true }
+        )
+        onAdded(res.data)
+        count++
+        setSavedCount(count)
+      }
       onClose()
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to save chapter.')
+      setError(err.response?.data?.error || 'Failed to import chapters.')
     } finally {
       setSaving(false)
     }
@@ -119,128 +99,68 @@ function AddChapterModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm px-4">
       <div className="bg-[#13131a] border border-white/10 rounded-2xl w-full max-w-lg p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-5">
-          <h2 className="font-display text-xl text-white tracking-wide">Add Manual Chapter</h2>
-          <button onClick={onClose} className="text-text-muted hover:text-white transition-colors">
-            <X size={18} />
-          </button>
+          <h2 className="font-display text-xl text-white tracking-wide">Import from MangaDex</h2>
+          <button onClick={onClose} className="text-text-muted hover:text-white transition-colors"><X size={18} /></button>
         </div>
 
-        <div className="space-y-3">
-
-          {/* MangaDex Import */}
-          <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-xl">
-            <label className="font-mono text-xs text-blue-400 tracking-widest block mb-1.5">
-              IMPORT FROM MANGADEX URL
-            </label>
+        <div className="space-y-4">
+          {/* Step 1: paste manga URL */}
+          <div>
+            <label className="font-mono text-xs text-blue-400 tracking-widest block mb-1.5">STEP 1 — PASTE MANGA PAGE URL</label>
             <div className="flex gap-2">
               <input
-                value={mdUrl}
-                onChange={(e) => { setMdUrl(e.target.value); setImportSuccess(false) }}
-                placeholder="https://mangadex.org/chapter/..."
-                className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-text font-body outline-none focus:border-blue-500/50"
+                value={mangaUrl}
+                onChange={e => { setMangaUrl(e.target.value); setChapterList([]); setSelected(new Set()) }}
+                placeholder="https://mangadex.org/title/32d76d19-..."
+                className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-text font-body outline-none focus:border-blue-500/50 font-mono text-xs"
               />
-              <button
-                onClick={handleImport}
-                disabled={importing || !mdUrl.trim()}
-                className="px-4 py-2 bg-blue-500/20 border border-blue-500/40 text-blue-400 text-xs font-body rounded-xl hover:bg-blue-500/30 transition-all disabled:opacity-40 whitespace-nowrap"
-              >
-                {importing ? 'Fetching…' : 'Import'}
+              <button onClick={handleFetchChapters} disabled={fetching || !mangaUrl.trim()}
+                className="px-4 py-2 bg-blue-500/20 border border-blue-500/40 text-blue-400 text-xs font-body rounded-xl hover:bg-blue-500/30 transition-all disabled:opacity-40 whitespace-nowrap">
+                {fetching ? 'Loading…' : 'Load Chapters'}
               </button>
             </div>
-            {importSuccess && (
-              <p className="text-xs text-green-400 mt-1.5 font-body">
-                ✓ {form.pages.split('\n').filter(Boolean).length} pages imported — review and save below
-              </p>
-            )}
           </div>
 
-          {/* Row: Number + Volume */}
-          <div className="grid grid-cols-2 gap-3">
+          {/* Step 2: pick chapters */}
+          {chapterList.length > 0 && (
             <div>
-              <label className="font-mono text-xs text-text-muted tracking-widest block mb-1">CHAPTER NO. *</label>
-              <input
-                value={form.chapterNumber}
-                onChange={(e) => set('chapterNumber', e.target.value)}
-                placeholder="e.g. 79.2"
-                className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-text font-body outline-none focus:border-primary/50"
-              />
+              <div className="flex items-center justify-between mb-2">
+                <label className="font-mono text-xs text-blue-400 tracking-widest">STEP 2 — SELECT CHAPTERS ({chapterList.length} found)</label>
+                <div className="flex gap-3">
+                  <button onClick={() => setSelected(new Set(chapterList.map(c => c.id)))} className="text-xs text-primary font-body">All</button>
+                  <button onClick={() => setSelected(new Set())} className="text-xs text-text-muted font-body">None</button>
+                </div>
+              </div>
+              <div className="flex flex-col gap-1 max-h-64 overflow-y-auto pr-1">
+                {chapterList.map(ch => (
+                  <label key={ch.id}
+                    className={`flex items-center gap-3 px-3 py-2 rounded-xl cursor-pointer transition-all ${selected.has(ch.id) ? 'bg-primary/20 border border-primary/30' : 'bg-white/5 border border-transparent hover:bg-white/10'}`}>
+                    <input type="checkbox" checked={selected.has(ch.id)} onChange={() => toggle(ch.id)} className="accent-primary shrink-0" />
+                    <span className="text-sm text-white font-body font-medium w-16 shrink-0">Ch. {ch.chapter}</span>
+                    <span className="text-xs text-text-muted font-body truncate flex-1">{ch.title || '—'}</span>
+                    <span className="text-xs text-text-muted font-mono shrink-0">{ch.pages}p</span>
+                  </label>
+                ))}
+              </div>
+              {selected.size > 0 && (
+                <p className="text-xs text-green-400 font-body mt-2">✓ {selected.size} chapter{selected.size !== 1 ? 's' : ''} selected — pages load live when reading</p>
+              )}
             </div>
-            <div>
-              <label className="font-mono text-xs text-text-muted tracking-widest block mb-1">VOLUME</label>
-              <input
-                value={form.volume}
-                onChange={(e) => set('volume', e.target.value)}
-                placeholder="e.g. 8"
-                className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-text font-body outline-none focus:border-primary/50"
-              />
-            </div>
-          </div>
-
-          {/* Title */}
-          <div>
-            <label className="font-mono text-xs text-text-muted tracking-widest block mb-1">TITLE</label>
-            <input
-              value={form.title}
-              onChange={(e) => set('title', e.target.value)}
-              placeholder="Optional chapter title"
-              className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-text font-body outline-none focus:border-primary/50"
-            />
-          </div>
-
-          {/* Language */}
-          <div>
-            <label className="font-mono text-xs text-text-muted tracking-widest block mb-1">LANGUAGE</label>
-            <select
-              value={form.language}
-              onChange={(e) => set('language', e.target.value)}
-              className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-text font-body outline-none focus:border-primary/50"
-            >
-              <option value="en">English</option>
-              <option value="ja">Japanese</option>
-              <option value="es">Spanish</option>
-              <option value="fr">French</option>
-              <option value="pt-br">Portuguese (BR)</option>
-              <option value="id">Indonesian</option>
-            </select>
-          </div>
-
-          {/* Pages */}
-          <div>
-            <label className="font-mono text-xs text-text-muted tracking-widest block mb-1">
-              PAGE URLs <span className="normal-case text-text-muted/60">(one per line)</span>
-            </label>
-            <textarea
-              value={form.pages}
-              onChange={(e) => set('pages', e.target.value)}
-              placeholder={"https://cdn.example.com/page1.jpg\nhttps://cdn.example.com/page2.jpg"}
-              rows={5}
-              className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-text font-body outline-none focus:border-primary/50 resize-none font-mono"
-            />
-            <p className="text-xs text-text-muted mt-1 font-body">
-              {form.pages.split('\n').filter((l) => l.trim()).length} pages entered
-            </p>
-          </div>
+          )}
 
           {error && (
-            <p className="text-xs text-red-400 font-body bg-red-400/10 border border-red-400/20 rounded-lg px-3 py-2">
-              {error}
-            </p>
+            <p className="text-xs text-red-400 font-body bg-red-400/10 border border-red-400/20 rounded-lg px-3 py-2">{error}</p>
           )}
         </div>
 
         <div className="flex gap-3 mt-6">
-          <button
-            onClick={handleSubmit}
-            disabled={saving}
-            className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-primary hover:bg-primary/90 text-white text-sm font-body font-medium rounded-xl transition-all disabled:opacity-50"
-          >
+          <button onClick={handleImport} disabled={saving || selected.size === 0}
+            className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-primary hover:bg-primary/90 text-white text-sm font-body font-medium rounded-xl transition-all disabled:opacity-50">
             <Upload size={14} />
-            {saving ? 'Saving…' : 'Add Chapter'}
+            {saving ? `Importing ${savedCount}/${selected.size}…` : `Import ${selected.size > 0 ? selected.size + ' ' : ''}Chapter${selected.size !== 1 ? 's' : ''}`}
           </button>
-          <button
-            onClick={onClose}
-            className="px-5 py-2.5 glass border border-white/10 text-text-muted text-sm font-body rounded-xl hover:text-text transition-colors"
-          >
+          <button onClick={onClose}
+            className="px-5 py-2.5 glass border border-white/10 text-text-muted text-sm font-body rounded-xl hover:text-text transition-colors">
             Cancel
           </button>
         </div>
@@ -263,7 +183,33 @@ export default function MangaDetail() {
   const [showAddModal, setShowAddModal] = useState(false)
   const [showHidden, setShowHidden] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set())
+  const [bulkMode, setBulkMode] = useState(false)
+  const [bulkWorking, setBulkWorking] = useState(false)
   const { toggleFavorite, isFavorite, isAdmin } = useAuth()
+
+  const toggleBulkSelect = (id: string) => setBulkSelected(prev => {
+    const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next
+  })
+
+  const handleBulkDelete = async () => {
+    if (!confirm(`Delete ${bulkSelected.size} chapters? This cannot be undone.`)) return
+    setBulkWorking(true)
+    try {
+      await axios.post('/api/admin/mangadex/chapters/bulk-delete', { ids: [...bulkSelected] }, { withCredentials: true })
+      setManualChapters(prev => prev.filter(c => !bulkSelected.has(c._id)))
+      setBulkSelected(new Set()); setBulkMode(false)
+    } finally { setBulkWorking(false) }
+  }
+
+  const handleBulkPublish = async (publish: boolean) => {
+    setBulkWorking(true)
+    try {
+      await axios.post('/api/admin/mangadex/chapters/bulk-publish', { ids: [...bulkSelected], published: publish }, { withCredentials: true })
+      setManualChapters(prev => prev.map(c => bulkSelected.has(c._id) ? { ...c, published: publish } : c))
+      setBulkSelected(new Set()); setBulkMode(false)
+    } finally { setBulkWorking(false) }
+  }
 
   useEffect(() => {
     if (!id) return
@@ -277,17 +223,24 @@ export default function MangaDetail() {
     }).finally(() => setLoading(false))
   }, [id])
 
-  // Admins also load manual chapters and hidden chapter IDs
+  // Load manual chapters for all users; admins also get hidden chapter IDs
   useEffect(() => {
-    if (!id || !isAdmin) return
-    Promise.all([
-      axios.get(`/api/admin/mangadex/${id}/chapters`, { withCredentials: true }),
-      axios.get(`/api/admin/mangadex/${id}/hidden-chapters`, { withCredentials: true }),
-    ]).then(([manualRes, hiddenRes]) => {
-      setManualChapters(manualRes.data)
-      setHiddenChapterIds(new Set(hiddenRes.data.hidden))
-      setDeletedChapterIds(new Set(hiddenRes.data.deleted))
-    }).catch(() => {})
+    if (!id) return
+    if (isAdmin) {
+      Promise.all([
+        axios.get(`/api/admin/mangadex/${id}/chapters`, { withCredentials: true }),
+        axios.get(`/api/admin/mangadex/${id}/hidden-chapters`, { withCredentials: true }),
+      ]).then(([manualRes, hiddenRes]) => {
+        setManualChapters(manualRes.data)
+        setHiddenChapterIds(new Set(hiddenRes.data.hidden))
+        setDeletedChapterIds(new Set(hiddenRes.data.deleted))
+      }).catch(() => {})
+    } else {
+      // Non-admins: only fetch published chapters via local-manga endpoint
+      axios.get(`/api/local-manga/manual-chapters/${id}`)
+        .then(res => setManualChapters(res.data))
+        .catch(() => {})
+    }
   }, [id, isAdmin])
 
   const handleDeleteManual = async (chapterId: string) => {
@@ -359,7 +312,7 @@ export default function MangaDetail() {
         return !hiddenChapterIds.has(c.id)
       })
       .map((c): MergedChapter => ({ type: 'api', data: c })),
-    ...(isAdmin && !showHidden ? manualChapters.map((c): MergedChapter => ({ type: 'manual', data: c })) : []),
+    ...(!showHidden ? (isAdmin ? manualChapters : manualChapters.filter(c => c.published)).map((c): MergedChapter => ({ type: 'manual', data: c })) : []),
   ].sort((a, b) => {
     const numA = parseFloat(a.type === 'api' ? a.data.attributes.chapter || '0' : a.data.chapterNumber)
     const numB = parseFloat(b.type === 'api' ? b.data.attributes.chapter || '0' : b.data.chapterNumber)
@@ -489,28 +442,53 @@ export default function MangaDetail() {
             ))}
           </div>
 
-          {/* Admin only: Add Chapter + Show Hidden buttons */}
+          {/* Admin only: toolbar */}
           {isAdmin && tab === 'chapters' && (
-            <div className="flex items-center gap-2 mb-3">
-              {hiddenChapterIds.size > 0 && (
-                <button
-                  onClick={() => setShowHidden((v) => !v)}
-                  className={`flex items-center gap-1.5 px-4 py-1.5 text-xs font-body rounded-xl border transition-all ${
-                    showHidden
-                      ? 'bg-red-500/20 border-red-500/40 text-red-400 hover:bg-red-500/30'
-                      : 'bg-white/5 border-white/10 text-text-muted hover:border-white/20'
-                  }`}
-                >
-                  {showHidden ? `Hide (${hiddenChapterIds.size} hidden)` : `Show Hidden (${hiddenChapterIds.size})`}
-                </button>
+            <div className="flex items-center gap-2 mb-3 flex-wrap">
+              {bulkMode ? (
+                <>
+                  <span className="text-xs text-text-muted font-body">{bulkSelected.size} selected</span>
+                  <button onClick={() => setBulkSelected(new Set(manualChapters.map(c => c._id)))}
+                    className="text-xs text-primary font-body hover:underline">All</button>
+                  <button onClick={() => setBulkSelected(new Set())}
+                    className="text-xs text-text-muted font-body hover:underline">None</button>
+                  <button onClick={() => handleBulkPublish(true)} disabled={bulkWorking || bulkSelected.size === 0}
+                    className="flex items-center gap-1 px-3 py-1.5 bg-green-500/20 border border-green-500/40 text-green-400 text-xs font-body rounded-xl hover:bg-green-500/30 disabled:opacity-40">
+                    <Eye size={11} /> Publish
+                  </button>
+                  <button onClick={() => handleBulkPublish(false)} disabled={bulkWorking || bulkSelected.size === 0}
+                    className="flex items-center gap-1 px-3 py-1.5 bg-yellow-500/20 border border-yellow-500/40 text-yellow-400 text-xs font-body rounded-xl hover:bg-yellow-500/30 disabled:opacity-40">
+                    <EyeOff size={11} /> Unpublish
+                  </button>
+                  <button onClick={handleBulkDelete} disabled={bulkWorking || bulkSelected.size === 0}
+                    className="flex items-center gap-1 px-3 py-1.5 bg-red-500/20 border border-red-500/40 text-red-400 text-xs font-body rounded-xl hover:bg-red-500/30 disabled:opacity-40">
+                    <Trash2 size={11} /> Delete
+                  </button>
+                  <button onClick={() => { setBulkMode(false); setBulkSelected(new Set()) }}
+                    className="px-3 py-1.5 bg-white/5 border border-white/10 text-text-muted text-xs font-body rounded-xl hover:bg-white/10">
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <>
+                  {hiddenChapterIds.size > 0 && (
+                    <button onClick={() => setShowHidden((v) => !v)}
+                      className={`flex items-center gap-1.5 px-4 py-1.5 text-xs font-body rounded-xl border transition-all ${showHidden ? 'bg-red-500/20 border-red-500/40 text-red-400' : 'bg-white/5 border-white/10 text-text-muted hover:border-white/20'}`}>
+                      {showHidden ? `Hide (${hiddenChapterIds.size})` : `Show Hidden (${hiddenChapterIds.size})`}
+                    </button>
+                  )}
+                  {manualChapters.length > 0 && (
+                    <button onClick={() => setBulkMode(true)}
+                      className="flex items-center gap-1.5 px-4 py-1.5 bg-white/5 border border-white/10 text-text-muted text-xs font-body rounded-xl hover:bg-white/10 transition-all">
+                      <CheckSquare size={13} /> Bulk Edit
+                    </button>
+                  )}
+                  <button onClick={() => setShowAddModal(true)}
+                    className="flex items-center gap-1.5 px-4 py-1.5 bg-amber-500/20 border border-amber-500/40 text-amber-400 text-xs font-body rounded-xl hover:bg-amber-500/30 transition-all">
+                    <Plus size={13} /> Add Chapter
+                  </button>
+                </>
               )}
-              <button
-                onClick={() => setShowAddModal(true)}
-                className="flex items-center gap-1.5 px-4 py-1.5 bg-amber-500/20 border border-amber-500/40 text-amber-400 text-xs font-body rounded-xl hover:bg-amber-500/30 transition-all"
-              >
-                <Plus size={13} />
-                Add Chapter
-              </button>
             </div>
           )}
         </div>
@@ -593,36 +571,57 @@ export default function MangaDetail() {
                 )
               }
 
-              // Manual chapter (admin sees these)
+              // Manual chapter
               const ch = item.data
               return (
                 <div key={ch._id} className="flex items-center gap-2">
+                  {/* Bulk checkbox */}
+                  {bulkMode && (
+                    <button onClick={() => toggleBulkSelect(ch._id)} className="p-1 shrink-0 text-text-muted hover:text-primary transition-colors">
+                      {bulkSelected.has(ch._id) ? <CheckSquare size={16} className="text-primary" /> : <Square size={16} />}
+                    </button>
+                  )}
                   <Link to={`/read/manual/${ch._id}`}
-                    className="flex-1 flex items-center justify-between glass px-4 py-3 rounded-xl border border-amber-500/20 hover:border-amber-500/40 transition-all group">
+                    className={`flex-1 flex items-center justify-between glass px-4 py-3 rounded-xl border transition-all group ${bulkSelected.has(ch._id) ? 'border-primary/40 bg-primary/5' : 'border-amber-500/20 hover:border-amber-500/40'}`}>
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <p className="font-body text-sm text-text group-hover:text-amber-400 transition-colors">
                           {ch.volume ? `Vol.${ch.volume} ` : ''}Ch.{ch.chapterNumber}
                           {ch.title ? ` — ${ch.title}` : ''}
                         </p>
                         <span className="px-1.5 py-0.5 bg-amber-500/15 border border-amber-500/30 text-amber-400 text-[10px] font-mono rounded-md">
-                          MANUAL
+                          {ch.source === 'mangadex' ? 'MDX' : 'MANUAL'}
                         </span>
+                        {isAdmin && (
+                          <span className={`px-1.5 py-0.5 text-[10px] font-mono rounded-md border ${ch.published ? 'bg-green-500/15 border-green-500/30 text-green-400' : 'bg-white/5 border-white/20 text-text-muted'}`}>
+                            {ch.published ? 'PUBLISHED' : 'DRAFT'}
+                          </span>
+                        )}
                       </div>
                       <p className="font-mono text-xs text-text-muted mt-0.5">
-                        {new Date(ch.createdAt).toLocaleDateString()} · {ch.pages.length} pages
+                        {new Date(ch.createdAt).toLocaleDateString()}
+                        {ch.source !== 'mangadex' && ` · ${ch.pages.length} pages`}
                       </p>
                     </div>
                   </Link>
-                  {/* Admin: delete button */}
-                  <button
-                    onClick={() => handleDeleteManual(ch._id)}
-                    disabled={deletingId === ch._id}
-                    className="p-2 text-text-muted hover:text-red-400 transition-colors disabled:opacity-40 flex-shrink-0"
-                    title="Delete chapter"
-                  >
-                    <Trash2 size={14} />
-                  </button>
+                  {/* Admin: single publish toggle + delete (when not in bulk mode) */}
+                  {isAdmin && !bulkMode && (
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button onClick={async () => {
+                          await axios.post('/api/admin/mangadex/chapters/bulk-publish', { ids: [ch._id], published: !ch.published }, { withCredentials: true })
+                          setManualChapters(prev => prev.map(c => c._id === ch._id ? { ...c, published: !c.published } : c))
+                        }}
+                        className={`p-2 transition-colors ${ch.published ? 'text-green-400 hover:text-green-300' : 'text-text-muted hover:text-green-400'}`}
+                        title={ch.published ? 'Unpublish' : 'Publish'}>
+                        {ch.published ? <Eye size={14} /> : <EyeOff size={14} />}
+                      </button>
+                      <button onClick={() => handleDeleteManual(ch._id)} disabled={deletingId === ch._id}
+                        className="p-2 text-text-muted hover:text-red-400 transition-colors disabled:opacity-40"
+                        title="Delete chapter">
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  )}
                 </div>
               )
             })}
