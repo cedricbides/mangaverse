@@ -2,6 +2,8 @@ import { Router, Request, Response } from 'express'
 import LocalManga from '../models/LocalManga'
 import LocalChapter from '../models/LocalChapter'
 import MangaDexManualChapter from '../models/MangaDexManualChapter'
+import HiddenChapter from '../models/HiddenChapter'
+import DeletedChapter from '../models/DeletedChapter'
 import User, { IUser } from '../models/User'
 import { requireAdmin } from '../middleware/auth'
 
@@ -68,6 +70,17 @@ router.delete('/chapters/:chapterId', async (req: Request, res: Response) => {
 
 // ─── MANGADEX MANUAL CHAPTERS (admin-only) ───────────────────────────────────
 
+// GET a single manual chapter by ID (for reader)
+router.get('/mangadex/manual-chapter/:chapterId', async (req: Request, res: Response) => {
+  try {
+    const chapter = await MangaDexManualChapter.findById(req.params.chapterId)
+    if (!chapter) return res.status(404).json({ error: 'Not found' })
+    res.json(chapter)
+  } catch (err: any) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // GET all manual chapters for a MangaDex manga
 router.get('/mangadex/:mangaDexId/chapters', async (req: Request, res: Response) => {
   try {
@@ -119,6 +132,72 @@ router.put('/mangadex/chapters/:chapterId', async (req: Request, res: Response) 
 router.delete('/mangadex/chapters/:chapterId', async (req: Request, res: Response) => {
   try {
     await MangaDexManualChapter.findByIdAndDelete(req.params.chapterId)
+    res.json({ success: true })
+  } catch (err: any) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ─── MANGADEX HIDDEN (API) CHAPTERS ─────────────────────────────────────────
+
+// GET list of hidden + permanently deleted chapter IDs for a MangaDex manga
+router.get('/mangadex/:mangaDexId/hidden-chapters', async (req: Request, res: Response) => {
+  try {
+    const [hidden, deleted] = await Promise.all([
+      HiddenChapter.find({ mangaDexId: req.params.mangaDexId }),
+      DeletedChapter.find({ mangaDexId: req.params.mangaDexId }),
+    ])
+    res.json({
+      hidden: hidden.map((h) => h.chapterId),
+      deleted: deleted.map((d) => d.chapterId),
+    })
+  } catch (err: any) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// POST hide an API chapter (soft delete)
+router.post('/mangadex/:mangaDexId/hidden-chapters', async (req: Request, res: Response) => {
+  try {
+    const { chapterId, chapterNumber, chapterTitle, mangaTitle } = req.body
+    if (!chapterId) return res.status(400).json({ error: 'chapterId required' })
+    const user = req.user as IUser | undefined
+    await HiddenChapter.findOneAndUpdate(
+      { mangaDexId: req.params.mangaDexId, chapterId },
+      { hiddenBy: user?.id || 'admin', chapterNumber, chapterTitle, mangaTitle },
+      { upsert: true, new: true }
+    )
+    res.json({ success: true })
+  } catch (err: any) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// DELETE un-hide an API chapter (restore)
+router.delete('/mangadex/:mangaDexId/hidden-chapters/:chapterId', async (req: Request, res: Response) => {
+  try {
+    await HiddenChapter.findOneAndDelete({
+      mangaDexId: req.params.mangaDexId,
+      chapterId: req.params.chapterId,
+    })
+    res.json({ success: true })
+  } catch (err: any) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// POST permanently delete an API chapter (cannot be restored)
+router.post('/mangadex/:mangaDexId/deleted-chapters', async (req: Request, res: Response) => {
+  try {
+    const { chapterId, chapterNumber, chapterTitle, mangaTitle } = req.body
+    if (!chapterId) return res.status(400).json({ error: 'chapterId required' })
+    const user = req.user as IUser | undefined
+    await HiddenChapter.findOneAndDelete({ mangaDexId: req.params.mangaDexId, chapterId })
+    await DeletedChapter.findOneAndUpdate(
+      { mangaDexId: req.params.mangaDexId, chapterId },
+      { deletedBy: user?.id || 'admin', chapterNumber, chapterTitle, mangaTitle },
+      { upsert: true, new: true }
+    )
     res.json({ success: true })
   } catch (err: any) {
     res.status(500).json({ error: err.message })

@@ -44,10 +44,53 @@ function AddChapterModal({
     language: 'en',
     pages: '',
   })
+  const [mdUrl, setMdUrl] = useState('')
+  const [importing, setImporting] = useState(false)
+  const [importSuccess, setImportSuccess] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
   const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }))
+
+  // Extract chapter ID from MangaDex URL or raw ID
+  const extractChapterId = (input: string): string | null => {
+    const match = input.match(/chapter\/([a-f0-9-]{36})/)
+    if (match) return match[1]
+    if (/^[a-f0-9-]{36}$/.test(input.trim())) return input.trim()
+    return null
+  }
+
+  const handleImport = async () => {
+    const chapterId = extractChapterId(mdUrl)
+    if (!chapterId) return setError('Invalid MangaDex chapter URL or ID.')
+    setImporting(true)
+    setError('')
+    setImportSuccess(false)
+    try {
+      const MD = 'https://api.mangadex.org'
+      const [metaRes, serverRes] = await Promise.all([
+        axios.get(`${MD}/chapter/${chapterId}`),
+        axios.get(`${MD}/at-home/server/${chapterId}`),
+      ])
+      const attr = metaRes.data.data.attributes
+      const { baseUrl, chapter } = serverRes.data
+      const pages = chapter.data.map(
+        (file: string) => `${baseUrl}/data/${chapter.hash}/${file}`
+      )
+      setForm({
+        chapterNumber: attr.chapter || '',
+        title: attr.title || '',
+        volume: attr.volume || '',
+        language: attr.translatedLanguage || 'en',
+        pages: pages.join('\n'),
+      })
+      setImportSuccess(true)
+    } catch {
+      setError('Failed to fetch chapter from MangaDex.')
+    } finally {
+      setImporting(false)
+    }
+  }
 
   const handleSubmit = async () => {
     if (!form.chapterNumber.trim()) return setError('Chapter number is required.')
@@ -74,7 +117,7 @@ function AddChapterModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm px-4">
-      <div className="bg-[#13131a] border border-white/10 rounded-2xl w-full max-w-lg p-6 shadow-2xl">
+      <div className="bg-[#13131a] border border-white/10 rounded-2xl w-full max-w-lg p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-5">
           <h2 className="font-display text-xl text-white tracking-wide">Add Manual Chapter</h2>
           <button onClick={onClose} className="text-text-muted hover:text-white transition-colors">
@@ -83,6 +126,34 @@ function AddChapterModal({
         </div>
 
         <div className="space-y-3">
+
+          {/* MangaDex Import */}
+          <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-xl">
+            <label className="font-mono text-xs text-blue-400 tracking-widest block mb-1.5">
+              IMPORT FROM MANGADEX URL
+            </label>
+            <div className="flex gap-2">
+              <input
+                value={mdUrl}
+                onChange={(e) => { setMdUrl(e.target.value); setImportSuccess(false) }}
+                placeholder="https://mangadex.org/chapter/..."
+                className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-text font-body outline-none focus:border-blue-500/50"
+              />
+              <button
+                onClick={handleImport}
+                disabled={importing || !mdUrl.trim()}
+                className="px-4 py-2 bg-blue-500/20 border border-blue-500/40 text-blue-400 text-xs font-body rounded-xl hover:bg-blue-500/30 transition-all disabled:opacity-40 whitespace-nowrap"
+              >
+                {importing ? 'Fetching…' : 'Import'}
+              </button>
+            </div>
+            {importSuccess && (
+              <p className="text-xs text-green-400 mt-1.5 font-body">
+                ✓ {form.pages.split('\n').filter(Boolean).length} pages imported — review and save below
+              </p>
+            )}
+          </div>
+
           {/* Row: Number + Volume */}
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -185,9 +256,12 @@ export default function MangaDetail() {
   const [manga, setManga] = useState<Manga | null>(null)
   const [apiChapters, setApiChapters] = useState<Chapter[]>([])
   const [manualChapters, setManualChapters] = useState<ManualChapter[]>([])
+  const [hiddenChapterIds, setHiddenChapterIds] = useState<Set<string>>(new Set())
+  const [deletedChapterIds, setDeletedChapterIds] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<'chapters' | 'info'>('chapters')
   const [showAddModal, setShowAddModal] = useState(false)
+  const [showHidden, setShowHidden] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const { toggleFavorite, isFavorite, isAdmin } = useAuth()
 
@@ -203,16 +277,21 @@ export default function MangaDetail() {
     }).finally(() => setLoading(false))
   }, [id])
 
-  // Admins also load manual chapters
+  // Admins also load manual chapters and hidden chapter IDs
   useEffect(() => {
     if (!id || !isAdmin) return
-    axios.get(`/api/admin/mangadex/${id}/chapters`, { withCredentials: true })
-      .then((res) => setManualChapters(res.data))
-      .catch(() => {})
+    Promise.all([
+      axios.get(`/api/admin/mangadex/${id}/chapters`, { withCredentials: true }),
+      axios.get(`/api/admin/mangadex/${id}/hidden-chapters`, { withCredentials: true }),
+    ]).then(([manualRes, hiddenRes]) => {
+      setManualChapters(manualRes.data)
+      setHiddenChapterIds(new Set(hiddenRes.data.hidden))
+      setDeletedChapterIds(new Set(hiddenRes.data.deleted))
+    }).catch(() => {})
   }, [id, isAdmin])
 
   const handleDeleteManual = async (chapterId: string) => {
-    if (!confirm('Delete this manual chapter?')) return
+    if (!confirm('Delete this manual chapter? This cannot be undone.')) return
     setDeletingId(chapterId)
     try {
       await axios.delete(`/api/admin/mangadex/chapters/${chapterId}`, { withCredentials: true })
@@ -222,10 +301,65 @@ export default function MangaDetail() {
     }
   }
 
+  const handleHideApi = async (ch: Chapter) => {
+    if (!confirm('Hide this chapter from the list?')) return
+    setDeletingId(ch.id)
+    try {
+      await axios.post(
+        `/api/admin/mangadex/${id}/hidden-chapters`,
+        { chapterId: ch.id, chapterNumber: ch.attributes.chapter, chapterTitle: ch.attributes.title, mangaTitle: title },
+        { withCredentials: true }
+      )
+      setHiddenChapterIds((prev) => new Set([...prev, ch.id]))
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
+  const handleRestoreApi = async (chapterId: string) => {
+    setDeletingId(chapterId)
+    try {
+      await axios.delete(`/api/admin/mangadex/${id}/hidden-chapters/${chapterId}`, { withCredentials: true })
+      setHiddenChapterIds((prev) => {
+        const next = new Set(prev)
+        next.delete(chapterId)
+        return next
+      })
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
+  const handlePermanentDelete = async (ch: Chapter) => {
+    if (!confirm('Permanently delete this chapter? This CANNOT be undone or restored.')) return
+    setDeletingId(ch.id)
+    try {
+      await axios.post(
+        `/api/admin/mangadex/${id}/deleted-chapters`,
+        { chapterId: ch.id, chapterNumber: ch.attributes.chapter, chapterTitle: ch.attributes.title, mangaTitle: title },
+        { withCredentials: true }
+      )
+      setDeletedChapterIds((prev) => new Set([...prev, ch.id]))
+      setHiddenChapterIds((prev) => {
+        const next = new Set(prev)
+        next.delete(ch.id)
+        return next
+      })
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
   // Merge and sort all chapters by chapter number descending
   const mergedChapters: MergedChapter[] = [
-    ...apiChapters.map((c): MergedChapter => ({ type: 'api', data: c })),
-    ...(isAdmin ? manualChapters.map((c): MergedChapter => ({ type: 'manual', data: c })) : []),
+    ...apiChapters
+      .filter((c) => {
+        if (deletedChapterIds.has(c.id)) return false
+        if (showHidden) return hiddenChapterIds.has(c.id)
+        return !hiddenChapterIds.has(c.id)
+      })
+      .map((c): MergedChapter => ({ type: 'api', data: c })),
+    ...(isAdmin && !showHidden ? manualChapters.map((c): MergedChapter => ({ type: 'manual', data: c })) : []),
   ].sort((a, b) => {
     const numA = parseFloat(a.type === 'api' ? a.data.attributes.chapter || '0' : a.data.chapterNumber)
     const numB = parseFloat(b.type === 'api' ? b.data.attributes.chapter || '0' : b.data.chapterNumber)
@@ -355,15 +489,29 @@ export default function MangaDetail() {
             ))}
           </div>
 
-          {/* Admin only: Add Chapter button */}
+          {/* Admin only: Add Chapter + Show Hidden buttons */}
           {isAdmin && tab === 'chapters' && (
-            <button
-              onClick={() => setShowAddModal(true)}
-              className="flex items-center gap-1.5 px-4 py-1.5 mb-3 bg-amber-500/20 border border-amber-500/40 text-amber-400 text-xs font-body rounded-xl hover:bg-amber-500/30 transition-all"
-            >
-              <Plus size={13} />
-              Add Chapter
-            </button>
+            <div className="flex items-center gap-2 mb-3">
+              {hiddenChapterIds.size > 0 && (
+                <button
+                  onClick={() => setShowHidden((v) => !v)}
+                  className={`flex items-center gap-1.5 px-4 py-1.5 text-xs font-body rounded-xl border transition-all ${
+                    showHidden
+                      ? 'bg-red-500/20 border-red-500/40 text-red-400 hover:bg-red-500/30'
+                      : 'bg-white/5 border-white/10 text-text-muted hover:border-white/20'
+                  }`}
+                >
+                  {showHidden ? `Hide (${hiddenChapterIds.size} hidden)` : `Show Hidden (${hiddenChapterIds.size})`}
+                </button>
+              )}
+              <button
+                onClick={() => setShowAddModal(true)}
+                className="flex items-center gap-1.5 px-4 py-1.5 bg-amber-500/20 border border-amber-500/40 text-amber-400 text-xs font-body rounded-xl hover:bg-amber-500/30 transition-all"
+              >
+                <Plus size={13} />
+                Add Chapter
+              </button>
+            </div>
           )}
         </div>
 
@@ -378,53 +526,99 @@ export default function MangaDetail() {
               if (item.type === 'api') {
                 const ch = item.data
                 return (
-                  <Link key={ch.id} to={`/read/${ch.id}`}
-                    className="flex items-center justify-between glass-hover glass px-4 py-3 rounded-xl group">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <p className="font-body text-sm text-text group-hover:text-primary transition-colors">
-                          {formatChapter(ch)}
+                  <div key={ch.id} className="flex items-center gap-2 group">
+                    <Link to={`/read/${ch.id}`}
+                      className="flex-1 flex items-center justify-between glass-hover glass px-4 py-3 rounded-xl">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <p className="font-body text-sm text-text group-hover:text-primary transition-colors">
+                            {formatChapter(ch)}
+                          </p>
+                          {/* API source badge */}
+                          <span className="px-1.5 py-0.5 bg-blue-500/15 border border-blue-500/30 text-blue-400 text-[10px] font-mono rounded-md">
+                            API
+                          </span>
+                        </div>
+                        <p className="font-mono text-xs text-text-muted mt-0.5">
+                          {new Date(ch.attributes.publishAt).toLocaleDateString()}
                         </p>
-                        {/* API source badge */}
-                        <span className="px-1.5 py-0.5 bg-blue-500/15 border border-blue-500/30 text-blue-400 text-[10px] font-mono rounded-md">
-                          API
-                        </span>
                       </div>
-                      <p className="font-mono text-xs text-text-muted mt-0.5">
-                        {new Date(ch.attributes.publishAt).toLocaleDateString()}
-                      </p>
-                    </div>
-                    <BookOpen size={14} className="text-text-muted group-hover:text-primary transition-colors" />
-                  </Link>
+                      <BookOpen size={14} className="text-text-muted group-hover:text-primary transition-colors" />
+                    </Link>
+                    {/* Admin: hide/restore + permanent delete buttons */}
+                    {isAdmin && (
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        {showHidden ? (
+                          <>
+                            <button
+                              onClick={() => handleRestoreApi(ch.id)}
+                              disabled={deletingId === ch.id}
+                              className="px-2 py-1 text-xs font-body text-green-400 hover:text-green-300 transition-colors disabled:opacity-40"
+                              title="Restore chapter"
+                            >
+                              Restore
+                            </button>
+                            <button
+                              onClick={() => handlePermanentDelete(ch)}
+                              disabled={deletingId === ch.id}
+                              className="p-2 text-red-500 hover:text-red-400 transition-colors disabled:opacity-40"
+                              title="Permanently delete"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => handleHideApi(ch)}
+                              disabled={deletingId === ch.id}
+                              className="p-2 text-text-muted hover:text-yellow-400 transition-colors disabled:opacity-40"
+                              title="Hide chapter"
+                            >
+                              <X size={14} />
+                            </button>
+                            <button
+                              onClick={() => handlePermanentDelete(ch)}
+                              disabled={deletingId === ch.id}
+                              className="p-2 text-text-muted hover:text-red-400 transition-colors disabled:opacity-40"
+                              title="Permanently delete"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 )
               }
 
               // Manual chapter (admin sees these)
               const ch = item.data
               return (
-                <div key={ch._id}
-                  className="flex items-center justify-between glass px-4 py-3 rounded-xl border border-amber-500/20 group">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <p className="font-body text-sm text-text">
-                        {ch.volume ? `Vol.${ch.volume} ` : ''}Ch.{ch.chapterNumber}
-                        {ch.title ? ` — ${ch.title}` : ''}
+                <div key={ch._id} className="flex items-center gap-2">
+                  <Link to={`/read/manual/${ch._id}`}
+                    className="flex-1 flex items-center justify-between glass px-4 py-3 rounded-xl border border-amber-500/20 hover:border-amber-500/40 transition-all group">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <p className="font-body text-sm text-text group-hover:text-amber-400 transition-colors">
+                          {ch.volume ? `Vol.${ch.volume} ` : ''}Ch.{ch.chapterNumber}
+                          {ch.title ? ` — ${ch.title}` : ''}
+                        </p>
+                        <span className="px-1.5 py-0.5 bg-amber-500/15 border border-amber-500/30 text-amber-400 text-[10px] font-mono rounded-md">
+                          MANUAL
+                        </span>
+                      </div>
+                      <p className="font-mono text-xs text-text-muted mt-0.5">
+                        {new Date(ch.createdAt).toLocaleDateString()} · {ch.pages.length} pages
                       </p>
-                      {/* Manual source badge */}
-                      <span className="px-1.5 py-0.5 bg-amber-500/15 border border-amber-500/30 text-amber-400 text-[10px] font-mono rounded-md">
-                        MANUAL
-                      </span>
                     </div>
-                    <p className="font-mono text-xs text-text-muted mt-0.5">
-                      {new Date(ch.createdAt).toLocaleDateString()} · {ch.pages.length} pages
-                    </p>
-                  </div>
-
+                  </Link>
                   {/* Admin: delete button */}
                   <button
                     onClick={() => handleDeleteManual(ch._id)}
                     disabled={deletingId === ch._id}
-                    className="text-text-muted hover:text-red-400 transition-colors disabled:opacity-40"
+                    className="p-2 text-text-muted hover:text-red-400 transition-colors disabled:opacity-40 flex-shrink-0"
                     title="Delete chapter"
                   >
                     <Trash2 size={14} />

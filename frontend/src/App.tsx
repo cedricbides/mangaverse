@@ -12,6 +12,7 @@ import Login from '@/pages/Login'
 import Admin from '@/pages/Admin'
 import LocalMangaDetail from '@/pages/LocalMangaDetail'
 import LocalReader from '@/pages/LocalReader'
+import ManualReader from '@/pages/ManualReader'
 
 function Layout({ children }: { children: React.ReactNode }) {
   return (
@@ -39,6 +40,7 @@ export default function App() {
           <Route path="/admin" element={<Layout><Admin /></Layout>} />
           <Route path="/local/:id" element={<Layout><LocalMangaDetail /></Layout>} />
           <Route path="/read/local/:chapterId" element={<LocalReader />} />
+          <Route path="/read/manual/:chapterId" element={<ManualReader />} />
         </Routes>
       </AuthProvider>
     </BrowserRouter>

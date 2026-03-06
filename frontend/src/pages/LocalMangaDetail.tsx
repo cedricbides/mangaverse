@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { Heart, BookOpen, Eye, Calendar, ChevronRight, User } from 'lucide-react'
+import { Heart, BookOpen, Eye, Calendar, ChevronRight, User, Trash2 } from 'lucide-react'
 import axios from 'axios'
 import type { LocalManga, LocalChapter } from '@/types'
 import { useAuth } from '@/context/AuthContext'
@@ -17,7 +17,8 @@ export default function LocalMangaDetail() {
   const [manga, setManga] = useState<LocalManga | null>(null)
   const [chapters, setChapters] = useState<LocalChapter[]>([])
   const [loading, setLoading] = useState(true)
-  const { toggleFavorite, isFavorite, user } = useAuth()
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const { toggleFavorite, isFavorite, user, isAdmin } = useAuth()
 
   useEffect(() => {
     if (!id) return
@@ -30,6 +31,19 @@ export default function LocalMangaDetail() {
       setChapters(chaptersRes.data)
     }).finally(() => setLoading(false))
   }, [id])
+
+  const handleDeleteChapter = async (chapterId: string) => {
+    if (!confirm('Delete this chapter? This cannot be undone.')) return
+    setDeletingId(chapterId)
+    try {
+      await axios.delete(`/api/admin/chapters/${chapterId}`, { withCredentials: true })
+      setChapters((prev) => prev.filter((c) => c._id !== chapterId))
+    } catch {
+      alert('Failed to delete chapter.')
+    } finally {
+      setDeletingId(null)
+    }
+  }
 
   if (loading) return (
     <div className="max-w-4xl mx-auto px-5 pt-28 pb-16 animate-pulse">
@@ -135,25 +149,38 @@ export default function LocalMangaDetail() {
         ) : (
           <div className="flex flex-col gap-2">
             {[...chapters].reverse().map((ch, i) => (
-              <Link key={ch._id} to={`/read/local/${ch._id}`}
-                className="flex items-center justify-between glass rounded-xl px-5 py-3.5 hover:border-primary/30 border border-transparent transition-all group">
-                <div className="flex items-center gap-4">
-                  <span className="font-mono text-xs text-text-muted w-6">{chapters.length - i}</span>
-                  <div>
-                    <span className="font-body text-sm text-text group-hover:text-primary transition-colors">
-                      {ch.volume && `Vol.${ch.volume} `}Chapter {ch.chapterNumber}
-                      {ch.title && <span className="text-text-muted"> — {ch.title}</span>}
-                    </span>
-                    <p className="text-xs text-text-muted font-body mt-0.5">{ch.pages.length} pages</p>
+              <div key={ch._id} className="flex items-center gap-2 group/row">
+                <Link to={`/read/local/${ch._id}`}
+                  className="flex-1 flex items-center justify-between glass rounded-xl px-5 py-3.5 hover:border-primary/30 border border-transparent transition-all group">
+                  <div className="flex items-center gap-4">
+                    <span className="font-mono text-xs text-text-muted w-6">{chapters.length - i}</span>
+                    <div>
+                      <span className="font-body text-sm text-text group-hover:text-primary transition-colors">
+                        {ch.volume && `Vol.${ch.volume} `}Chapter {ch.chapterNumber}
+                        {ch.title && <span className="text-text-muted"> — {ch.title}</span>}
+                      </span>
+                      <p className="text-xs text-text-muted font-body mt-0.5">{ch.pages.length} pages</p>
+                    </div>
                   </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-xs text-text-muted font-body">
-                    {new Date(ch.createdAt).toLocaleDateString()}
-                  </span>
-                  <ChevronRight size={14} className="text-text-muted group-hover:text-primary transition-colors" />
-                </div>
-              </Link>
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs text-text-muted font-body">
+                      {new Date(ch.createdAt).toLocaleDateString()}
+                    </span>
+                    <ChevronRight size={14} className="text-text-muted group-hover:text-primary transition-colors" />
+                  </div>
+                </Link>
+                {/* Admin: delete button */}
+                {isAdmin && (
+                  <button
+                    onClick={() => handleDeleteChapter(ch._id)}
+                    disabled={deletingId === ch._id}
+                    className="p-2 text-text-muted hover:text-red-400 transition-colors disabled:opacity-40 flex-shrink-0"
+                    title="Delete chapter"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
+              </div>
             ))}
           </div>
         )}
