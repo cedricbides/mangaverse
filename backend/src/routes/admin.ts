@@ -1,21 +1,20 @@
 import { Router, Request, Response } from 'express'
 import LocalManga from '../models/LocalManga'
 import LocalChapter from '../models/LocalChapter'
+import MangaDexManualChapter from '../models/MangaDexManualChapter'
 import User, { IUser } from '../models/User'
 import { requireAdmin } from '../middleware/auth'
 
 const router = Router()
 router.use(requireAdmin)
 
-// ─── MANGA ───────────────────────────────────────────────────────────────────
+// ─── LOCAL MANGA ─────────────────────────────────────────────────────────────
 
-// List all local manga
 router.get('/manga', async (_req, res) => {
   const list = await LocalManga.find().sort({ createdAt: -1 })
   res.json(list)
 })
 
-// Create manga
 router.post('/manga', async (req: Request, res: Response) => {
   try {
     const { title, altTitle, coverUrl, description, genres, status, author, artist, year, featured } = req.body
@@ -27,29 +26,25 @@ router.post('/manga', async (req: Request, res: Response) => {
   }
 })
 
-// Update manga
 router.put('/manga/:id', async (req: Request, res: Response) => {
   const manga = await LocalManga.findByIdAndUpdate(req.params.id, req.body, { new: true })
   if (!manga) return res.status(404).json({ error: 'Not found' })
   res.json(manga)
 })
 
-// Delete manga + its chapters
 router.delete('/manga/:id', async (req: Request, res: Response) => {
   await LocalChapter.deleteMany({ mangaId: req.params.id })
   await LocalManga.findByIdAndDelete(req.params.id)
   res.json({ success: true })
 })
 
-// ─── CHAPTERS ────────────────────────────────────────────────────────────────
+// ─── LOCAL CHAPTERS ──────────────────────────────────────────────────────────
 
-// List chapters for a manga
 router.get('/manga/:id/chapters', async (req: Request, res: Response) => {
   const chapters = await LocalChapter.find({ mangaId: req.params.id }).sort({ chapterNumber: 1 })
   res.json(chapters)
 })
 
-// Add chapter
 router.post('/manga/:id/chapters', async (req: Request, res: Response) => {
   try {
     const { chapterNumber, title, volume, pages, language } = req.body
@@ -60,17 +55,74 @@ router.post('/manga/:id/chapters', async (req: Request, res: Response) => {
   }
 })
 
-// Update chapter
 router.put('/chapters/:chapterId', async (req: Request, res: Response) => {
   const chapter = await LocalChapter.findByIdAndUpdate(req.params.chapterId, req.body, { new: true })
   if (!chapter) return res.status(404).json({ error: 'Not found' })
   res.json(chapter)
 })
 
-// Delete chapter
 router.delete('/chapters/:chapterId', async (req: Request, res: Response) => {
   await LocalChapter.findByIdAndDelete(req.params.chapterId)
   res.json({ success: true })
+})
+
+// ─── MANGADEX MANUAL CHAPTERS (admin-only) ───────────────────────────────────
+
+// GET all manual chapters for a MangaDex manga
+router.get('/mangadex/:mangaDexId/chapters', async (req: Request, res: Response) => {
+  try {
+    const chapters = await MangaDexManualChapter.find({ mangaDexId: req.params.mangaDexId })
+      .sort({ chapterNumber: 1 })
+    res.json(chapters)
+  } catch (err: any) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// POST add a manual chapter to a MangaDex manga
+router.post('/mangadex/:mangaDexId/chapters', async (req: Request, res: Response) => {
+  try {
+    const { chapterNumber, title, volume, pages, language } = req.body
+    const user = req.user as IUser | undefined
+    const chapter = await MangaDexManualChapter.create({
+      mangaDexId: req.params.mangaDexId,
+      chapterNumber,
+      title,
+      volume,
+      pages: pages || [],
+      language: language || 'en',
+      uploadedBy: user?.id || 'admin',
+      source: 'manual',
+    })
+    res.status(201).json(chapter)
+  } catch (err: any) {
+    res.status(400).json({ error: err.message })
+  }
+})
+
+// PUT update a manual chapter
+router.put('/mangadex/chapters/:chapterId', async (req: Request, res: Response) => {
+  try {
+    const chapter = await MangaDexManualChapter.findByIdAndUpdate(
+      req.params.chapterId,
+      req.body,
+      { new: true }
+    )
+    if (!chapter) return res.status(404).json({ error: 'Not found' })
+    res.json(chapter)
+  } catch (err: any) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// DELETE a manual chapter
+router.delete('/mangadex/chapters/:chapterId', async (req: Request, res: Response) => {
+  try {
+    await MangaDexManualChapter.findByIdAndDelete(req.params.chapterId)
+    res.json({ success: true })
+  } catch (err: any) {
+    res.status(500).json({ error: err.message })
+  }
 })
 
 // ─── USERS ───────────────────────────────────────────────────────────────────

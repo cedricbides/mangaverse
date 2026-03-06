@@ -12,6 +12,7 @@ import authRoutes from './routes/auth'
 import favRoutes from './routes/favorites'
 import adminRoutes from './routes/admin'
 import localMangaRoutes from './routes/localManga'
+import mangadexRoutes from './routes/mangadex'
 
 dotenv.config()
 
@@ -29,13 +30,13 @@ app.use(express.json({ limit: '10mb' }))
 
 // ─── Rate Limiters ────────────────────────────────────────────────────────────
 const registerLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
+  windowMs: 60 * 60 * 1000,
   max: 3,
   message: { error: 'Too many accounts created from this IP, try again in 1 hour' }
 })
 
 const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 15 * 60 * 1000,
   max: 10,
   message: { error: 'Too many login attempts, try again in 15 minutes' }
 })
@@ -68,6 +69,7 @@ app.use('/api/auth', authRoutes)
 app.use('/api/favorites', favRoutes)
 app.use('/api/admin', adminRoutes)
 app.use('/api/local-manga', localMangaRoutes)
+app.use('/api/mangadex', mangadexRoutes)
 
 // ─── DB + Start ──────────────────────────────────────────────────────────────
 mongoose.connect(MONGO_URI)

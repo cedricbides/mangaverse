@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useNavigate } from 'react-router-dom'
 import { ChevronLeft, ChevronRight, Home, List, ZoomIn, ZoomOut } from 'lucide-react'
 import axios from 'axios'
 
@@ -12,12 +12,16 @@ interface ChapterPages {
 
 export default function Reader() {
   const { chapterId } = useParams<{ chapterId: string }>()
+  const navigate = useNavigate()
   const [pages, setPages] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [mangaId, setMangaId] = useState('')
   const [zoom, setZoom] = useState(100)
   const [quality, setQuality] = useState<'data' | 'dataSaver'>('data')
+  const [chapterList, setChapterList] = useState<string[]>([]) // ordered chapter IDs
+  const [currentIndex, setCurrentIndex] = useState(-1)
 
+  // Load pages + manga info
   useEffect(() => {
     if (!chapterId) return
     setLoading(true)
@@ -38,6 +42,30 @@ export default function Reader() {
       if (mangaRel) setMangaId(mangaRel.id)
     }).finally(() => setLoading(false))
   }, [chapterId, quality])
+
+  // Fetch chapter list for prev/next navigation
+  useEffect(() => {
+    if (!mangaId) return
+    axios.get(`${MD}/manga/${mangaId}/feed`, {
+      params: {
+        translatedLanguage: ['en'],
+        order: { chapter: 'asc' },
+        limit: 500,
+      }
+    }).then(res => {
+      const ids: string[] = res.data.data.map((c: { id: string }) => c.id)
+      setChapterList(ids)
+      setCurrentIndex(ids.findIndex(id => id === chapterId))
+    })
+  }, [mangaId, chapterId])
+
+  const prevChapterId = currentIndex > 0 ? chapterList[currentIndex - 1] : null
+  const nextChapterId = currentIndex >= 0 && currentIndex < chapterList.length - 1 ? chapterList[currentIndex + 1] : null
+
+  const goToChapter = (id: string) => {
+    window.scrollTo(0, 0)
+    navigate(`/read/${id}`)
+  }
 
   return (
     <div className="min-h-screen bg-black">
@@ -97,15 +125,27 @@ export default function Reader() {
       {/* Bottom nav */}
       {!loading && (
         <div className="sticky bottom-0 bg-black/90 backdrop-blur-xl border-t border-white/5 py-3 px-4 flex items-center justify-center gap-4">
-          <button className="flex items-center gap-1.5 text-sm text-text-muted hover:text-white font-body transition-colors">
+          <button
+            onClick={() => prevChapterId && goToChapter(prevChapterId)}
+            disabled={!prevChapterId}
+            className={`flex items-center gap-1.5 text-sm font-body transition-colors ${
+              prevChapterId ? 'text-text-muted hover:text-white cursor-pointer' : 'text-white/20 cursor-not-allowed'
+            }`}>
             <ChevronLeft size={16} /> Previous Chapter
           </button>
+
           {mangaId && (
             <Link to={`/manga/${mangaId}`} className="flex items-center gap-1.5 text-sm text-primary font-body">
               <List size={14} /> Chapter List
             </Link>
           )}
-          <button className="flex items-center gap-1.5 text-sm text-text-muted hover:text-white font-body transition-colors">
+
+          <button
+            onClick={() => nextChapterId && goToChapter(nextChapterId)}
+            disabled={!nextChapterId}
+            className={`flex items-center gap-1.5 text-sm font-body transition-colors ${
+              nextChapterId ? 'text-text-muted hover:text-white cursor-pointer' : 'text-white/20 cursor-not-allowed'
+            }`}>
             Next Chapter <ChevronRight size={16} />
           </button>
         </div>
