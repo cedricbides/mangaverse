@@ -16,11 +16,12 @@ import localMangaRoutes from './routes/localManga'
 import mangadexRoutes from './routes/mangadex'
 import uploadRoutes from './routes/upload'
 import proxyRoutes from './routes/proxy'
+import socialRoutes from './routes/social'
 
 dotenv.config()
 
 const app = express()
-app.set('etag', false)  // disable ETags to prevent stale 304 responses
+app.set('etag', false)
 const PORT = process.env.PORT || 5000
 const MONGO_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/mangaverse'
 
@@ -77,6 +78,7 @@ app.use('/api/local-manga', localMangaRoutes)
 app.use('/api/mangadex', mangadexRoutes)
 app.use('/api/upload', uploadRoutes)
 app.use('/api/proxy', proxyRoutes)
+app.use('/api/social', socialRoutes)
 
 // ─── DB + Start ──────────────────────────────────────────────────────────────
 mongoose.connect(MONGO_URI)

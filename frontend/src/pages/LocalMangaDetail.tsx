@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import ReadingListButton from '@/components/ReadingListButton'
+import RatingReviews from '@/components/RatingReviews'
 import { useParams, Link } from 'react-router-dom'
 import { Heart, BookOpen, Eye, Calendar, ChevronRight, User, Trash2 } from 'lucide-react'
 import axios from 'axios'
@@ -79,7 +81,11 @@ export default function LocalMangaDetail() {
       {/* Hero */}
       <div className="relative mb-10">
         <div className="absolute inset-0 -z-10 overflow-hidden rounded-3xl">
-          <img src={manga.coverUrl} alt="" className="w-full h-full object-cover opacity-10 blur-2xl scale-110" />
+          <img
+            src={manga.coverUrl}
+            alt={manga.title}
+            className="w-full h-full object-cover opacity-10 blur-2xl scale-110"
+          />
           <div className="absolute inset-0 bg-gradient-to-t from-bg via-bg/80 to-transparent" />
         </div>
         <div className="flex flex-col md:flex-row gap-8 p-6">
@@ -125,13 +131,21 @@ export default function LocalMangaDetail() {
                 </Link>
               )}
               {user && (
-                <button onClick={() => toggleFavorite(`local_${manga._id}`)}
-                  className={`flex items-center gap-2 px-5 py-3 rounded-xl text-sm font-body border transition-all ${
-                    fav ? 'bg-primary/20 border-primary/40 text-primary' : 'glass border-white/10 text-text-muted hover:border-primary/30'
-                  }`}>
-                  <Heart size={15} fill={fav ? 'currentColor' : 'none'} />
-                  {fav ? 'Saved' : 'Save'}
-                </button>
+                <>
+                  <button
+                    onClick={() => toggleFavorite(`local_${manga._id}`)}
+                    className={`flex items-center gap-2 px-5 py-3 rounded-xl text-sm font-body border transition-all ${
+                      fav
+                        ? 'bg-primary/20 border-primary/40 text-primary'
+                        : 'glass border-white/10 text-text-muted hover:border-primary/30'
+                    }`}
+                  >
+                    <Heart size={15} fill={fav ? 'currentColor' : 'none'} />
+                    {fav ? 'Saved' : 'Save'}
+                  </button>
+
+                  <ReadingListButton mangaId={`local_${manga._id}`} />
+                </>
               )}
             </div>
           </div>
@@ -184,6 +198,8 @@ export default function LocalMangaDetail() {
             ))}
           </div>
         )}
+        {/* Ratings & Reviews */}
+        <RatingReviews mangaId={`local_${manga._id}`} />
       </div>
     </div>
   )

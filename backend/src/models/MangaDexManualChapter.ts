@@ -11,6 +11,7 @@ export interface IMangaDexManualChapter extends Document {
   uploadedBy: string
   source: 'manual' | 'mangadex'
   published: boolean      // true = visible to all users, false = admin only
+  externalUrl?: string    // optional external URL shown as a link button on chapter
   createdAt: Date
   updatedAt: Date
 }
@@ -27,6 +28,7 @@ const MangaDexManualChapterSchema = new Schema(
     uploadedBy:    { type: String },
     source:        { type: String, default: 'manual' },
     published:     { type: Boolean, default: false },  // draft by default
+    externalUrl:   { type: String },                    // optional external read link
   },
   { timestamps: true }
 )

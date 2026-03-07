@@ -48,6 +48,8 @@ export interface Chapter {
   relationships: MangaRelationship[]
 }
 
+export type ReadingStatus = 'reading' | 'completed' | 'plan_to_read' | 'dropped' | 'on_hold'
+
 export interface User {
   id: string
   name: string
@@ -55,6 +57,7 @@ export interface User {
   avatar: string
   role: 'user' | 'admin'
   favorites: string[]
+  readingList: Array<{ mangaId: string; status: ReadingStatus; updatedAt: string }>
   readingHistory: { mangaId: string; chapterId: string; page: number; updatedAt: string; isLocal?: boolean }[]
 }
 

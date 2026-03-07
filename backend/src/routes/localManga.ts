@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express'
+import mongoose from 'mongoose'
 import LocalManga from '../models/LocalManga'
 import LocalChapter from '../models/LocalChapter'
 import MangaDexManualChapter from '../models/MangaDexManualChapter'
@@ -25,16 +26,36 @@ router.get('/manual-chapter/:chapterId', async (req: Request, res: Response) => 
   res.json(chapter)
 })
 
-// Get single manga by slug or ID
-router.get('/:slug', async (req: Request, res: Response) => {
-  const manga = await LocalManga.findOne({ slug: req.params.slug })
-  if (!manga) {
-    const byId = await LocalManga.findById(req.params.slug).catch(() => null)
-    if (!byId) return res.status(404).json({ error: 'Not found' })
-    return res.json(byId)
+// GET published manual chapters for a MangaDex manga (public)
+// FIX: moved above /:slug to avoid route conflict, removed slow dynamic import
+router.get('/manual-chapters/:mangaDexId', async (req: Request, res: Response) => {
+  try {
+    const chapters = await MangaDexManualChapter
+      .find({ mangaDexId: req.params.mangaDexId, published: true })
+      .sort({ chapterNumber: 1 })
+    res.json(chapters)
+  } catch (err: any) {
+    res.status(500).json({ error: err.message })
   }
-  manga.views += 1
-  await manga.save()
+})
+
+// Get single manga by slug or ID
+// FIX: single query handles both slug and ObjectId, uses $inc instead of save()
+router.get('/:slug', async (req: Request, res: Response) => {
+  const param = req.params.slug
+  const isObjectId = mongoose.Types.ObjectId.isValid(param)
+
+  const query = isObjectId
+    ? { $or: [{ slug: param }, { _id: param }] }
+    : { slug: param }
+
+  const manga = await LocalManga.findOneAndUpdate(
+    query,
+    { $inc: { views: 1 } },
+    { new: true }
+  ).catch(() => null)
+
+  if (!manga) return res.status(404).json({ error: 'Not found' })
   res.json(manga)
 })
 
@@ -42,18 +63,6 @@ router.get('/:slug', async (req: Request, res: Response) => {
 router.get('/:id/chapters', async (req: Request, res: Response) => {
   const chapters = await LocalChapter.find({ mangaId: req.params.id }).sort({ chapterNumber: 1 })
   res.json(chapters)
-})
-
-// GET published manual chapters for a MangaDex manga (public)
-router.get('/manual-chapters/:mangaDexId', async (req, res) => {
-  try {
-    const chapters = await (await import('../models/MangaDexManualChapter')).default
-      .find({ mangaDexId: req.params.mangaDexId, published: true })
-      .sort({ chapterNumber: 1 })
-    res.json(chapters)
-  } catch (err: any) {
-    res.status(500).json({ error: err.message })
-  }
 })
 
 export default router

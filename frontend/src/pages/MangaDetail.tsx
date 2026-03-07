@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
+import ReadingListButton from '@/components/ReadingListButton'
+import RatingReviews from '@/components/RatingReviews'
 import { Heart, BookOpen, Star, Calendar, Tag, Plus, Trash2, X, Upload, CheckSquare, Square, Eye, EyeOff } from 'lucide-react'
 import axios from 'axios'
 import type { Manga, Chapter } from '@/types'
@@ -410,6 +412,7 @@ export default function MangaDetail() {
                 <Heart size={15} fill={fav ? 'currentColor' : 'none'} />
                 {fav ? 'Saved' : 'Save'}
               </button>
+              <ReadingListButton mangaId={manga.id} />
             </div>
           </div>
         </div>
@@ -649,6 +652,10 @@ export default function MangaDetail() {
             </div>
           </div>
         )}
+
+        {/* Ratings & Reviews */}
+        <RatingReviews mangaId={manga.id} />
+
       </div>
     </div>
   )

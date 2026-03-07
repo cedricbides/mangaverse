@@ -70,7 +70,6 @@ router.delete('/chapters/:chapterId', async (req: Request, res: Response) => {
 
 // ─── MANGADEX MANUAL CHAPTERS (admin-only) ───────────────────────────────────
 
-// GET a single manual chapter by ID (for reader)
 router.get('/mangadex/manual-chapter/:chapterId', async (req: Request, res: Response) => {
   try {
     const chapter = await MangaDexManualChapter.findById(req.params.chapterId)
@@ -81,7 +80,6 @@ router.get('/mangadex/manual-chapter/:chapterId', async (req: Request, res: Resp
   }
 })
 
-// GET all manual chapters for a MangaDex manga
 router.get('/mangadex/:mangaDexId/chapters', async (req: Request, res: Response) => {
   try {
     const chapters = await MangaDexManualChapter.find({ mangaDexId: req.params.mangaDexId })
@@ -92,10 +90,9 @@ router.get('/mangadex/:mangaDexId/chapters', async (req: Request, res: Response)
   }
 })
 
-// POST add a manual chapter to a MangaDex manga
 router.post('/mangadex/:mangaDexId/chapters', async (req: Request, res: Response) => {
   try {
-    const { chapterNumber, title, volume, pages, language, mdxChapterId } = req.body
+    const { chapterNumber, title, volume, pages, language, mdxChapterId, externalUrl } = req.body
     const user = req.user as IUser | undefined
     const chapter = await MangaDexManualChapter.create({
       mangaDexId: req.params.mangaDexId,
@@ -107,6 +104,7 @@ router.post('/mangadex/:mangaDexId/chapters', async (req: Request, res: Response
       language: language || 'en',
       uploadedBy: user?.id || 'admin',
       source: mdxChapterId ? 'mangadex' : 'manual',
+      externalUrl: externalUrl || undefined,
     })
     res.status(201).json(chapter)
   } catch (err: any) {
@@ -114,14 +112,9 @@ router.post('/mangadex/:mangaDexId/chapters', async (req: Request, res: Response
   }
 })
 
-// PUT update a manual chapter
 router.put('/mangadex/chapters/:chapterId', async (req: Request, res: Response) => {
   try {
-    const chapter = await MangaDexManualChapter.findByIdAndUpdate(
-      req.params.chapterId,
-      req.body,
-      { new: true }
-    )
+    const chapter = await MangaDexManualChapter.findByIdAndUpdate(req.params.chapterId, req.body, { new: true })
     if (!chapter) return res.status(404).json({ error: 'Not found' })
     res.json(chapter)
   } catch (err: any) {
@@ -129,7 +122,6 @@ router.put('/mangadex/chapters/:chapterId', async (req: Request, res: Response) 
   }
 })
 
-// DELETE a manual chapter
 router.delete('/mangadex/chapters/:chapterId', async (req: Request, res: Response) => {
   try {
     await MangaDexManualChapter.findByIdAndDelete(req.params.chapterId)
@@ -139,7 +131,6 @@ router.delete('/mangadex/chapters/:chapterId', async (req: Request, res: Respons
   }
 })
 
-// POST bulk delete manual chapters
 router.post('/mangadex/chapters/bulk-delete', async (req: Request, res: Response) => {
   try {
     const { ids } = req.body
@@ -151,7 +142,6 @@ router.post('/mangadex/chapters/bulk-delete', async (req: Request, res: Response
   }
 })
 
-// POST bulk publish/unpublish manual chapters
 router.post('/mangadex/chapters/bulk-publish', async (req: Request, res: Response) => {
   try {
     const { ids, published } = req.body
@@ -165,7 +155,6 @@ router.post('/mangadex/chapters/bulk-publish', async (req: Request, res: Respons
 
 // ─── MANGADEX HIDDEN (API) CHAPTERS ─────────────────────────────────────────
 
-// GET list of hidden + permanently deleted chapter IDs for a MangaDex manga
 router.get('/mangadex/:mangaDexId/hidden-chapters', async (req: Request, res: Response) => {
   try {
     const [hidden, deleted] = await Promise.all([
@@ -181,7 +170,6 @@ router.get('/mangadex/:mangaDexId/hidden-chapters', async (req: Request, res: Re
   }
 })
 
-// POST hide an API chapter (soft delete)
 router.post('/mangadex/:mangaDexId/hidden-chapters', async (req: Request, res: Response) => {
   try {
     const { chapterId, chapterNumber, chapterTitle, mangaTitle } = req.body
@@ -198,7 +186,6 @@ router.post('/mangadex/:mangaDexId/hidden-chapters', async (req: Request, res: R
   }
 })
 
-// DELETE un-hide an API chapter (restore)
 router.delete('/mangadex/:mangaDexId/hidden-chapters/:chapterId', async (req: Request, res: Response) => {
   try {
     await HiddenChapter.findOneAndDelete({
@@ -211,7 +198,6 @@ router.delete('/mangadex/:mangaDexId/hidden-chapters/:chapterId', async (req: Re
   }
 })
 
-// POST permanently delete an API chapter (cannot be restored)
 router.post('/mangadex/:mangaDexId/deleted-chapters', async (req: Request, res: Response) => {
   try {
     const { chapterId, chapterNumber, chapterTitle, mangaTitle } = req.body
@@ -246,12 +232,33 @@ router.put('/users/:id/role', async (req: Request, res: Response) => {
 // ─── STATS ───────────────────────────────────────────────────────────────────
 
 router.get('/stats', async (_req, res) => {
-  const [userCount, mangaCount, chapterCount] = await Promise.all([
+  const [
+    userCount,
+    mangaCount,
+    localChapterCount,
+    mdxPublished,
+    mdxDraft,
+    mdxManual,
+    mdxApi,
+  ] = await Promise.all([
     User.countDocuments(),
     LocalManga.countDocuments(),
     LocalChapter.countDocuments(),
+    MangaDexManualChapter.countDocuments({ published: true }),
+    MangaDexManualChapter.countDocuments({ published: false }),
+    MangaDexManualChapter.countDocuments({ source: 'manual' }),
+    MangaDexManualChapter.countDocuments({ source: 'mangadex' }),
   ])
-  res.json({ userCount, mangaCount, chapterCount })
+  res.json({
+    userCount,
+    mangaCount,
+    chapterCount: localChapterCount,
+    mdxPublished,
+    mdxDraft,
+    mdxManual,
+    mdxApi,
+    totalChapters: localChapterCount + mdxPublished + mdxDraft,
+  })
 })
 
 export default router

@@ -33,6 +33,7 @@ router.get('/manga-chapters/:mangaId', async (req: Request, res: Response) => {
       volume: c.attributes.volume,
       pages: c.attributes.pages,
       publishAt: c.attributes.publishAt,
+      language: c.attributes.translatedLanguage || 'en',
     }))
 
     res.setHeader('Cache-Control', 'no-store')

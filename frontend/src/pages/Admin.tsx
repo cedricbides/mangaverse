@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   Shield, Plus, Edit3, Trash2, BookOpen, Users, Layers,
-  ChevronDown, ChevronUp, X, Check, AlertCircle, Image, List, Upload, Loader
+  ChevronDown, ChevronUp, X, Check, AlertCircle, Image, List, Upload, Loader, Activity, CheckCircle, XCircle, Clock, ChevronRight
 } from 'lucide-react'
 import axios from 'axios'
 import { useAuth } from '@/context/AuthContext'
@@ -25,12 +25,39 @@ export default function Admin() {
   const { user, isAdmin, loading } = useAuth()
   const navigate = useNavigate()
   const [activeTab, setActiveTab] = useState<'manga' | 'users' | 'stats'>('manga')
-  const [stats, setStats] = useState({ userCount: 0, mangaCount: 0, chapterCount: 0 })
+  const [stats, setStats] = useState({ userCount: 0, mangaCount: 0, chapterCount: 0, mdxPublished: 0, mdxDraft: 0, mdxManual: 0, mdxApi: 0, totalChapters: 0 })
   const [mangaList, setMangaList] = useState<LocalManga[]>([])
   const [users, setUsers] = useState<any[]>([])
   const [loadingData, setLoadingData] = useState(false)
   const [expandedManga, setExpandedManga] = useState<string | null>(null)
   const [chapters, setChapters] = useState<Record<string, LocalChapter[]>>({})
+
+  // Batch jobs
+  type JobStatus = 'running' | 'done' | 'failed' | 'toolarge'
+  interface BatchJob {
+    id: string
+    label: string
+    total: number
+    done: number
+    failed: number
+    status: JobStatus
+    startedAt: Date
+    errors: string[]
+  }
+  const [jobs, setJobs] = useState<BatchJob[]>([])
+  const [showJobs, setShowJobs] = useState(false)
+
+  const createJob = (label: string, total: number): string => {
+    const id = Date.now().toString()
+    const job: BatchJob = { id, label, total, done: 0, failed: 0, status: 'running', startedAt: new Date(), errors: [] }
+    setJobs(prev => [job, ...prev.slice(0, 19)]) // keep last 20
+    setShowJobs(true)
+    return id
+  }
+
+  const updateJob = (id: string, patch: Partial<BatchJob>) => {
+    setJobs(prev => prev.map(j => j.id === id ? { ...j, ...patch } : j))
+  }
 
   // Modals
   const [showMangaForm, setShowMangaForm] = useState(false)
@@ -111,17 +138,20 @@ export default function Admin() {
             <p className="text-text-muted text-xs font-body">Logged in as {user?.name}</p>
           </div>
         </div>
-        <Link to="/" className="px-4 py-2 glass rounded-xl text-sm font-body text-text-muted hover:text-text transition-colors">
-          ← Back to Site
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link to="/" className="px-4 py-2 glass rounded-xl text-sm font-body text-text-muted hover:text-text transition-colors">
+            ← Back to Site
+          </Link>
+        </div>
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-3 gap-4 mb-8">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-8">
+        {/* Row 1: top-level */}
         {[
           { icon: Users, label: 'Total Users', value: stats.userCount, color: 'text-blue-400 bg-blue-400/10' },
           { icon: BookOpen, label: 'Local Manga', value: stats.mangaCount, color: 'text-green-400 bg-green-400/10' },
-          { icon: Layers, label: 'Chapters', value: stats.chapterCount, color: 'text-purple-400 bg-purple-400/10' },
+          { icon: Layers, label: 'Total Chapters', value: stats.totalChapters, color: 'text-purple-400 bg-purple-400/10' },
         ].map(({ icon: Icon, label, value, color }) => (
           <div key={label} className="glass rounded-2xl p-5">
             <div className={`w-10 h-10 rounded-xl ${color} flex items-center justify-center mb-3`}>
@@ -131,7 +161,113 @@ export default function Admin() {
             <p className="text-text-muted text-sm font-body mt-1">{label}</p>
           </div>
         ))}
+        {/* Row 2: chapter breakdown */}
+        <div className="glass rounded-2xl p-5 border border-green-500/20">
+          <div className="w-10 h-10 rounded-xl text-green-400 bg-green-400/10 flex items-center justify-center mb-3">
+            <Check size={18} />
+          </div>
+          <p className="font-display text-3xl text-white">{stats.mdxPublished}</p>
+          <p className="text-text-muted text-sm font-body mt-1">Published</p>
+        </div>
+        <div className="glass rounded-2xl p-5 border border-yellow-500/20">
+          <div className="w-10 h-10 rounded-xl text-yellow-400 bg-yellow-400/10 flex items-center justify-center mb-3">
+            <AlertCircle size={18} />
+          </div>
+          <p className="font-display text-3xl text-white">{stats.mdxDraft}</p>
+          <p className="text-text-muted text-sm font-body mt-1">Drafts</p>
+        </div>
+        <div className="glass rounded-2xl p-5 border border-amber-500/20">
+          <div className="w-10 h-10 rounded-xl text-amber-400 bg-amber-400/10 flex items-center justify-center mb-3">
+            <Upload size={18} />
+          </div>
+          <p className="font-display text-3xl text-white">{stats.mdxApi + stats.mdxManual + stats.chapterCount}</p>
+          <p className="text-text-muted text-sm font-body mt-1">Manually Added</p>
+        </div>
       </div>
+
+
+      {/* ── Batch Jobs Panel ─────────────────────────────────────── */}
+      {jobs.length > 0 && (
+        <div className="glass rounded-2xl mb-6 overflow-hidden">
+          <button
+            onClick={() => setShowJobs(v => !v)}
+            className="w-full flex items-center justify-between px-5 py-3 hover:bg-white/5 transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <Activity size={14} className="text-primary" />
+              <span className="font-body text-sm text-text font-medium">Batch Jobs</span>
+              <span className="text-xs text-text-muted font-body">({jobs.length})</span>
+              {jobs.some(j => j.status === 'running') && (
+                <span className="flex items-center gap-1 text-xs text-blue-400 font-body">
+                  <Loader size={10} className="animate-spin" /> Running
+                </span>
+              )}
+              {jobs.some(j => j.status === 'failed' || j.status === 'toolarge') && (
+                <span className="flex items-center gap-1 text-xs text-red-400 font-body">
+                  <XCircle size={10} /> Needs attention
+                </span>
+              )}
+            </div>
+            <ChevronRight size={14} className={`text-text-muted transition-transform ${showJobs ? 'rotate-90' : ''}`} />
+          </button>
+
+          {showJobs && (
+            <div className="border-t border-white/5 divide-y divide-white/5 max-h-72 overflow-y-auto">
+              {jobs.map(job => (
+                <div key={job.id} className="px-5 py-3 flex items-start gap-3">
+                  <div className="mt-0.5 shrink-0">
+                    {job.status === 'running' && <Loader size={14} className="text-blue-400 animate-spin" />}
+                    {job.status === 'done' && <CheckCircle size={14} className="text-green-400" />}
+                    {job.status === 'failed' && <XCircle size={14} className="text-red-400" />}
+                    {job.status === 'toolarge' && <AlertCircle size={14} className="text-yellow-400" />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-body text-sm text-text truncate">{job.label}</p>
+                      <span className="text-xs text-text-muted font-mono shrink-0">
+                        {job.done}/{job.total}
+                      </span>
+                    </div>
+                    {/* Progress bar */}
+                    <div className="mt-1.5 h-1 bg-white/10 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all ${
+                          job.status === 'done' ? 'bg-green-400' :
+                          job.status === 'failed' ? 'bg-red-400' :
+                          job.status === 'toolarge' ? 'bg-yellow-400' : 'bg-blue-400'
+                        }`}
+                        style={{ width: job.total > 0 ? `${Math.round((job.done / job.total) * 100)}%` : '0%' }}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between mt-1">
+                      <span className={`text-xs font-body capitalize ${
+                        job.status === 'done' ? 'text-green-400' :
+                        job.status === 'failed' ? 'text-red-400' :
+                        job.status === 'toolarge' ? 'text-yellow-400' : 'text-blue-400'
+                      }`}>
+                        {job.status === 'toolarge' ? 'Too large / partial' : job.status}
+                        {job.failed > 0 && ` · ${job.failed} failed`}
+                      </span>
+                      <span className="text-xs text-text-muted font-mono">
+                        {job.startedAt.toLocaleTimeString()}
+                      </span>
+                    </div>
+                    {job.errors.length > 0 && (
+                      <p className="text-xs text-red-400 font-body mt-1 truncate" title={job.errors.join(', ')}>
+                        ⚠ {job.errors[0]}
+                      </p>
+                    )}
+                  </div>
+                  <button onClick={() => setJobs(prev => prev.filter(j => j.id !== job.id))}
+                    className="p-1 text-text-muted hover:text-text transition-colors shrink-0 mt-0.5">
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-2 mb-6">
@@ -325,16 +461,18 @@ export default function Admin() {
         <ChapterFormModal
           mangaId={showChapterForm}
           onClose={() => setShowChapterForm(null)}
-          onSave={async (data) => {
+          onSave={async (data, jobCtx) => {
             const res = await axios.post(`/api/admin/manga/${showChapterForm}/chapters`, data, { withCredentials: true })
             setChapters(prev => ({
               ...prev,
               [showChapterForm]: [...(prev[showChapterForm] || []), res.data]
             }))
             if (expandedManga !== showChapterForm) setExpandedManga(showChapterForm)
-            setStats(s => ({ ...s, chapterCount: s.chapterCount + 1 }))
+            setStats(s => ({ ...s, chapterCount: s.chapterCount + 1, totalChapters: s.totalChapters + 1, mdxManual: s.mdxManual + (data.mdxChapterId ? 1 : 0), mdxApi: s.mdxApi + (data.mdxChapterId ? 1 : 0) }))
             setShowChapterForm(null)
           }}
+          createJob={createJob}
+          updateJob={updateJob}
         />
       )}
     </div>
@@ -473,14 +611,17 @@ function MangaFormModal({ manga, onClose, onSave }: {
 
 // ─── Chapter Form Modal ──────────────────────────────────────────────────────
 
-function ChapterFormModal({ mangaId, onClose, onSave }: {
+function ChapterFormModal({ mangaId, onClose, onSave, createJob, updateJob }: {
   mangaId: string
   onClose: () => void
-  onSave: (data: any) => Promise<void>
+  onSave: (data: any, jobCtx?: any) => Promise<void>
+  createJob?: (label: string, total: number) => string
+  updateJob?: (id: string, patch: any) => void
 }) {
   const [chapterNumber, setChapterNumber] = useState('')
   const [title, setTitle] = useState('')
   const [volume, setVolume] = useState('')
+  const [externalUrl, setExternalUrl] = useState('')
   const [pagesText, setPagesText] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -577,22 +718,38 @@ function ChapterFormModal({ mangaId, onClose, onSave }: {
     // MangaDex bulk import mode
     if (inputTab === 'mdx') {
       if (mdxSelected.size === 0) { setError('Select at least one chapter to import'); return }
+      const chaptersToImport = mdxChapterList.filter(c => mdxSelected.has(c.id))
+      const TOO_LARGE = 100
       setSaving(true)
-      try {
-        for (const ch of mdxChapterList.filter(c => mdxSelected.has(c.id))) {
+      const jobId = createJob?.(`MDX Import — ${chaptersToImport.length} chapters`, chaptersToImport.length) ?? ''
+      let done = 0; let failed = 0; const errors: string[] = []
+      for (const ch of chaptersToImport) {
+        try {
           await onSave({
             chapterNumber: ch.chapter || '?',
             title: ch.title || '',
             volume: ch.volume || '',
-            pages: [],           // empty — reader fetches fresh URLs via mdxChapterId
-            language: 'en',
+            pages: [],
+            language: ch.language || 'en',
             mdxChapterId: ch.id,
           })
+          done++
+          updateJob?.(jobId, { done, errors, status: done + failed < chaptersToImport.length ? 'running' : (failed > 0 ? 'failed' : 'done') })
+        } catch (err: any) {
+          failed++
+          const msg = err.response?.data?.error || `Ch.${ch.chapter} failed`
+          errors.push(msg)
+          const isTooLarge = err.response?.status === 413 || msg.toLowerCase().includes('large')
+          updateJob?.(jobId, { done, failed, errors, status: isTooLarge ? 'toolarge' : 'running' })
         }
-      } catch (err: any) {
-        setError(err.response?.data?.error || 'Failed to save')
-        setSaving(false)
+        if (chaptersToImport.length > TOO_LARGE && done + failed < chaptersToImport.length) {
+          await new Promise(r => setTimeout(r, 50)) // small delay to avoid rate limits on large batches
+        }
       }
+      updateJob?.(jobId, { status: failed === chaptersToImport.length ? 'failed' : failed > 0 ? 'failed' : 'done' })
+      if (failed > 0) setError(`${failed} chapter(s) failed to import. See Batch Jobs panel.`)
+      setSaving(false)
+      if (failed === 0) onClose()
       return
     }
     // URL / Upload mode
@@ -600,7 +757,7 @@ function ChapterFormModal({ mangaId, onClose, onSave }: {
     if (pages.length === 0) { setError('Add at least one page image'); return }
     setSaving(true)
     try {
-      await onSave({ chapterNumber, title, volume, pages, language: 'en' })
+      await onSave({ chapterNumber, title, volume, pages, language: 'en', externalUrl: externalUrl.trim() || undefined })
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to save')
       setSaving(false)
@@ -635,6 +792,21 @@ function ChapterFormModal({ mangaId, onClose, onSave }: {
               <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Optional"
                 className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-text font-body outline-none focus:border-primary/40" />
             </div>
+          </div>
+
+          {/* External URL field */}
+          <div>
+            <label className="text-xs text-text-muted font-body mb-1 block uppercase tracking-widest">
+              External Read Link
+              <span className="ml-2 text-white/30 normal-case font-body">optional — shows a link button on the chapter</span>
+            </label>
+            <input
+              value={externalUrl}
+              onChange={e => setExternalUrl(e.target.value)}
+              placeholder="https://webtoon.kakao.com/..."
+              type="url"
+              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-text font-body outline-none focus:border-blue-400/40 font-mono text-xs"
+            />
           </div>
 
           {/* Tab switcher: MangaDex / URL / Upload */}
