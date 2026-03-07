@@ -184,10 +184,19 @@ export default function LocalMangaDetail() {
                     <ChevronRight size={14} className="text-text-muted group-hover:text-primary transition-colors" />
                   </div>
                 </Link>
+
                 <DownloadChapterButton
-                  pages={ch.pages}
-                  label={`${manga.title} - Chapter ${ch.chapterNumber}${ch.title ? ' - ' + ch.title : ''}`}
+                  chapterId={ch._id}
+                  chapterNumber={ch.chapterNumber}
+                  chapterTitle={ch.title}
+                  source="manual"
+                  mangaId={manga._id}
+                  mangaTitle={manga.title}
+                  mangaCover={manga.coverUrl}
+                  resolvePages={async () => ch.pages}
+                  compact
                 />
+
                 {/* Admin: delete button */}
                 {isAdmin && (
                   <button
@@ -203,6 +212,7 @@ export default function LocalMangaDetail() {
             ))}
           </div>
         )}
+
         {/* Ratings & Reviews */}
         <RatingReviews mangaId={`local_${manga._id}`} />
       </div>

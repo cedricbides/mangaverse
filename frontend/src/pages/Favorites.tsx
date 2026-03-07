@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { Heart } from 'lucide-react'
 import axios from 'axios'
 import type { Manga } from '@/types'
@@ -9,7 +10,7 @@ import { useAuth } from '@/context/AuthContext'
 const MD = 'https://api.mangadex.org'
 
 export default function Favorites() {
-  const { user, login } = useAuth()
+  const { user } = useAuth()
   const [manga, setManga] = useState<Manga[]>([])
   const [loading, setLoading] = useState(false)
 
@@ -27,10 +28,11 @@ export default function Favorites() {
       <Heart size={48} className="text-primary mb-4 opacity-50" />
       <h2 className="font-display text-3xl text-white mb-2">Sign In to See Favorites</h2>
       <p className="font-body text-text-muted mb-6">Save manga you love and read them anytime.</p>
-      <button onClick={login}
+      <Link
+        to="/login"
         className="px-6 py-3 bg-primary hover:bg-primary/90 text-white font-body rounded-xl transition-all">
-        Sign in with Google
-      </button>
+        Sign In
+      </Link>
     </div>
   )
 

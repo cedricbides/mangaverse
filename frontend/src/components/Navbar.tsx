@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { Search, Menu, X, BookOpen, LogOut, User, Shield, Heart, Settings, Sun, Moon, BookMarked, Download } from 'lucide-react'
+import { Search, Menu, X, BookOpen, LogOut, User, Shield, Heart, Settings, Sun, Moon, BookMarked, WifiOff } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 
 // Generates a consistent avatar based on user's name
@@ -190,13 +190,11 @@ export default function Navbar() {
                       Favorites
                     </Link>
                   )}
-                  {user && (
-                    <Link to="/downloads" onClick={() => setDropdownOpen(false)}
-                      className="flex items-center gap-2 px-3 py-2.5 rounded-xl text-text-muted hover:text-text hover:bg-white/5 text-sm font-body transition-all">
-                      <Download size={15} />
-                      Downloads
-                    </Link>
-                  )}
+                  <Link to="/downloads" onClick={() => setDropdownOpen(false)}
+                    className="flex items-center gap-2 px-3 py-2.5 rounded-xl text-text-muted hover:text-violet-400 hover:bg-violet-500/5 text-sm font-body transition-all">
+                    <WifiOff size={15} />
+                    Offline Library
+                  </Link>
                 </div>
 
                 {/* Sign in / out */}
@@ -245,6 +243,9 @@ export default function Navbar() {
             <>
               <Link to="/favorites" onClick={() => setMenuOpen(false)} className="text-sm font-body py-1 text-text-muted flex items-center gap-2">
                 <Heart size={14} /> Favorites
+              </Link>
+              <Link to="/downloads" onClick={() => setMenuOpen(false)} className="text-sm font-body py-1 text-violet-400 flex items-center gap-2">
+                <WifiOff size={14} /> Offline Library
               </Link>
               <Link to="/profile" onClick={() => setMenuOpen(false)} className="text-sm font-body py-1 text-text-muted flex items-center gap-2">
                 <Settings size={14} /> Settings

@@ -1,147 +1,205 @@
-import { useState } from 'react'
-import { Download, Loader, CheckCircle, XCircle } from 'lucide-react'
-import axios from 'axios'
+import { useEffect, useState, useCallback } from 'react'
+import { Download, Trash2, Loader, WifiOff } from 'lucide-react'
+import { useAuth } from '@/context/AuthContext'
+import {
+  downloadChapterOffline,
+  isChapterDownloaded,
+  deleteOfflineChapter,
+} from '@/utils/offlineStorage'
 
 interface Props {
-  mdxChapterId?: string
-  pages?: string[]
-  label: string
-  mangaId?: string
-  mangaTitle?: string
-  mangaCover?: string
-  chapterNumber?: string
-}
-
-type Status = 'idle' | 'fetching' | 'downloading' | 'done' | 'error'
-
-export interface DownloadRecord {
-  id: string
+  chapterId: string
+  chapterNumber: string
+  chapterTitle?: string
+  source: 'api' | 'manual'
   mangaId: string
   mangaTitle: string
   mangaCover: string
-  chapterLabel: string
-  chapterNumber: string
-  downloadedAt: string
-  pageCount: number
+  resolvePages: () => Promise<string[]>
+  compact?: boolean
+  onStatusChange?: (downloaded: boolean) => void
 }
 
-export function getDownloads(): DownloadRecord[] {
-  try { return JSON.parse(localStorage.getItem('mv_downloads') || '[]') } catch { return [] }
-}
-
-function saveDownload(record: DownloadRecord) {
-  const existing = getDownloads().filter(d => d.id !== record.id)
-  localStorage.setItem('mv_downloads', JSON.stringify([record, ...existing].slice(0, 200)))
-}
+type Status = 'idle' | 'checking' | 'downloading' | 'done' | 'error' | 'deleting'
 
 export default function DownloadChapterButton({
-  mdxChapterId, pages, label,
-  mangaId = '', mangaTitle = '', mangaCover = '', chapterNumber = ''
+  chapterId,
+  chapterNumber,
+  chapterTitle,
+  source,
+  mangaId,
+  mangaTitle,
+  mangaCover,
+  resolvePages,
+  compact = false,
+  onStatusChange,
 }: Props) {
-  const [status, setStatus] = useState<Status>('idle')
+  const { user, loading: authLoading } = useAuth()
+  const [status, setStatus] = useState<Status>('checking')
   const [progress, setProgress] = useState(0)
   const [total, setTotal] = useState(0)
+  const [loaded, setLoaded] = useState(0)
+  const [error, setError] = useState('')
 
-  const download = async () => {
-    if (status === 'downloading' || status === 'fetching') return
-    setStatus('fetching')
+  useEffect(() => {
+    // Wait for auth to finish loading before checking storage
+    if (authLoading) return
+    // Guest users can't use offline downloads
+    if (!user) { setStatus('idle'); return }
+
+    isChapterDownloaded(user.id, chapterId)
+      .then(yes => setStatus(yes ? 'done' : 'idle'))
+      .catch(() => setStatus('idle'))
+  }, [authLoading, user, chapterId])
+
+  const handleDownload = useCallback(async () => {
+    if (!user) return
+    if (status === 'downloading' || status === 'deleting') return
+    setStatus('downloading')
     setProgress(0)
+    setError('')
+
     try {
-      let pageUrls: string[] = []
-      if (pages && pages.length > 0) {
-        pageUrls = pages
-      } else if (mdxChapterId) {
-        const res = await axios.get(`/api/mangadex/chapter-pages/${mdxChapterId}`)
-        pageUrls = res.data.pages
-      } else {
-        throw new Error('No pages available')
-      }
-      if (pageUrls.length === 0) throw new Error('No pages found')
-      setTotal(pageUrls.length)
-      setStatus('downloading')
-      const JSZip = await loadJSZip()
-      const zip = new JSZip()
-      const folder = zip.folder(label) as any
-      for (let i = 0; i < pageUrls.length; i++) {
-        const url = pageUrls[i]
-        const ext = url.split('?')[0].split('.').pop() || 'jpg'
-        const filename = `page_${String(i + 1).padStart(3, '0')}.${ext}`
-        const blob = await fetchImage(url)
-        folder.file(filename, blob)
-        setProgress(i + 1)
-      }
-      const content = await zip.generateAsync({ type: 'blob' })
-      triggerDownload(content, `${label}.zip`)
-      saveDownload({
-        id: mdxChapterId || `${mangaId}_${chapterNumber}`,
-        mangaId, mangaTitle, mangaCover, chapterLabel: label,
-        chapterNumber, downloadedAt: new Date().toISOString(), pageCount: pageUrls.length,
-      })
+      const pages = await resolvePages()
+      setTotal(pages.length)
+
+      await downloadChapterOffline(
+        user.id,
+        { chapterId, mangaId, mangaTitle, mangaCover, chapterNumber, chapterTitle, pageCount: pages.length, source },
+        pages,
+        (l, t) => {
+          setLoaded(l)
+          setTotal(t)
+          setProgress(Math.round((l / t) * 100))
+        }
+      )
+
       setStatus('done')
-      setTimeout(() => setStatus('idle'), 3000)
-    } catch (err) {
+      onStatusChange?.(true)
+    } catch (e: any) {
+      setError(e.message || 'Download failed')
       setStatus('error')
-      setTimeout(() => setStatus('idle'), 3000)
     }
+  }, [user, chapterId, resolvePages, status])
+
+  const handleDelete = useCallback(async () => {
+    if (!user) return
+    if (!confirm('Remove this chapter from offline storage?')) return
+    setStatus('deleting')
+    try {
+      await deleteOfflineChapter(user.id, chapterId)
+      setStatus('idle')
+      onStatusChange?.(false)
+    } catch {
+      setStatus('done')
+    }
+  }, [user, chapterId])
+
+  // Guest or auth still loading — hide button entirely
+  if (authLoading || !user) return null
+
+  // ── Compact variant ───────────────────────────────────────────────────────
+  if (compact) {
+    if (status === 'checking') return null
+
+    if (status === 'downloading') {
+      return (
+        <div className="relative w-7 h-7 flex items-center justify-center" title={`Downloading… ${progress}%`}>
+          <svg className="absolute inset-0 w-7 h-7 -rotate-90" viewBox="0 0 28 28">
+            <circle cx="14" cy="14" r="11" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="2.5" />
+            <circle cx="14" cy="14" r="11" fill="none" stroke="#7c6af7" strokeWidth="2.5"
+              strokeDasharray={`${2 * Math.PI * 11}`}
+              strokeDashoffset={`${2 * Math.PI * 11 * (1 - progress / 100)}`}
+              strokeLinecap="round" style={{ transition: 'stroke-dashoffset 0.3s' }} />
+          </svg>
+          <Loader size={11} className="text-violet-400 animate-spin" />
+        </div>
+      )
+    }
+
+    if (status === 'done') {
+      return (
+        <button onClick={handleDelete}
+          className="p-1.5 text-violet-400 hover:text-red-400 transition-colors"
+          title="Downloaded — click to remove">
+          <WifiOff size={14} />
+        </button>
+      )
+    }
+
+    if (status === 'deleting') {
+      return <Loader size={14} className="text-text-muted animate-spin mx-1.5" />
+    }
+
+    return (
+      <button onClick={handleDownload}
+        className="p-1.5 text-text-muted hover:text-violet-400 transition-colors"
+        title="Save for offline reading">
+        <Download size={14} />
+      </button>
+    )
   }
 
-  const isActive = status !== 'idle'
+  // ── Full variant ──────────────────────────────────────────────────────────
+  if (status === 'checking') {
+    return (
+      <div className="flex items-center gap-2 px-4 py-2 glass rounded-xl opacity-50">
+        <Loader size={13} className="animate-spin text-text-muted" />
+        <span className="text-xs font-body text-text-muted">Checking…</span>
+      </div>
+    )
+  }
+
+  if (status === 'downloading') {
+    return (
+      <div className="flex flex-col gap-1.5 px-4 py-2 bg-violet-500/10 border border-violet-500/30 rounded-xl min-w-[140px]">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Loader size={12} className="animate-spin text-violet-400" />
+            <span className="text-xs font-body text-violet-300">Saving offline…</span>
+          </div>
+          <span className="text-[10px] font-mono text-violet-400">{loaded}/{total}</span>
+        </div>
+        <div className="h-1 bg-white/10 rounded-full overflow-hidden">
+          <div className="h-full bg-violet-500 rounded-full transition-all duration-300"
+            style={{ width: `${progress}%` }} />
+        </div>
+      </div>
+    )
+  }
+
+  if (status === 'done') {
+    return (
+      <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1.5 px-3 py-2 bg-violet-500/10 border border-violet-500/30 rounded-xl">
+          <WifiOff size={12} className="text-violet-400" />
+          <span className="text-xs font-body text-violet-300">Offline ready</span>
+        </div>
+        <button onClick={handleDelete}
+          className="p-2 text-text-muted hover:text-red-400 transition-colors"
+          title="Remove offline copy">
+          <Trash2 size={13} />
+        </button>
+      </div>
+    )
+  }
+
+  if (status === 'error') {
+    return (
+      <button onClick={handleDownload}
+        className="flex items-center gap-1.5 px-3 py-2 bg-red-500/10 border border-red-500/30 text-red-400 text-xs font-body rounded-xl hover:bg-red-500/20 transition-all"
+        title={error}>
+        <Download size={12} />
+        Retry
+      </button>
+    )
+  }
+
   return (
-    <button onClick={download}
-      disabled={status === 'downloading' || status === 'fetching'}
-      title="Download chapter as ZIP"
-      className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-body border transition-all disabled:cursor-wait ${
-        status === 'done' ? 'bg-green-500/10 border-green-500/20 text-green-400'
-        : status === 'error' ? 'bg-red-500/10 border-red-500/20 text-red-400'
-        : isActive ? 'bg-primary/10 border-primary/30 text-primary'
-        : 'glass border-white/10 text-text-muted hover:text-primary hover:border-primary/30'
-      }`}>
-      {status === 'fetching' || status === 'downloading' ? <Loader size={13} className="animate-spin" />
-        : status === 'done' ? <CheckCircle size={13} />
-        : status === 'error' ? <XCircle size={13} />
-        : <Download size={13} />}
-      {isActive && <span>
-        {status === 'fetching' ? 'Fetching…' : status === 'done' ? 'Saved!' : status === 'error' ? 'Failed' : `${progress}/${total}`}
-      </span>}
-      {status === 'downloading' && total > 0 && (
-        <span className="ml-1 w-12 h-1 bg-white/10 rounded-full overflow-hidden inline-block align-middle">
-          <span className="h-full bg-primary rounded-full block transition-all"
-            style={{ width: `${Math.round((progress / total) * 100)}%` }} />
-        </span>
-      )}
+    <button onClick={handleDownload}
+      className="flex items-center gap-1.5 px-3 py-2 glass border-white/10 text-text-muted text-xs font-body rounded-xl hover:text-violet-400 hover:border-violet-400/30 transition-all">
+      <Download size={12} />
+      Save offline
     </button>
   )
-}
-
-async function fetchImage(url: string): Promise<Blob> {
-  try {
-    const res = await fetch(url, { mode: 'cors' })
-    if (!res.ok) throw new Error()
-    return await res.blob()
-  } catch {
-    const res = await fetch(`/api/proxy/image?url=${encodeURIComponent(url)}`)
-    if (!res.ok) throw new Error('Failed')
-    return await res.blob()
-  }
-}
-
-function triggerDownload(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url; a.download = filename
-  document.body.appendChild(a); a.click(); document.body.removeChild(a)
-  setTimeout(() => URL.revokeObjectURL(url), 5000)
-}
-
-let _jszip: any = null
-async function loadJSZip(): Promise<any> {
-  if (_jszip) return _jszip
-  return new Promise((resolve, reject) => {
-    if ((window as any).JSZip) { _jszip = (window as any).JSZip; return resolve(_jszip) }
-    const s = document.createElement('script')
-    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js'
-    s.onload = () => { _jszip = (window as any).JSZip; resolve(_jszip) }
-    s.onerror = () => reject(new Error('JSZip load failed'))
-    document.head.appendChild(s)
-  })
 }
