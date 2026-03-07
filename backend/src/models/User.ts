@@ -1,6 +1,8 @@
 import mongoose, { Schema, Document } from 'mongoose'
 import bcrypt from 'bcryptjs'
 
+export type ReadingStatus = 'reading' | 'completed' | 'plan_to_read' | 'on_hold' | 'dropped'
+
 export interface IUser extends Document {
   googleId?: string
   name: string
@@ -9,6 +11,11 @@ export interface IUser extends Document {
   password?: string
   role: 'user' | 'admin'
   favorites: string[]
+  readingList: Array<{
+    mangaId: string
+    status: ReadingStatus
+    updatedAt: Date
+  }>
   readingHistory: Array<{
     mangaId: string
     chapterId: string
@@ -29,6 +36,15 @@ const UserSchema = new Schema<IUser>(
     password: { type: String, select: false },
     role: { type: String, enum: ['user', 'admin'], default: 'user' },
     favorites: [{ type: String }],
+    readingList: [{
+      mangaId: { type: String, required: true },
+      status: {
+        type: String,
+        enum: ['reading', 'completed', 'plan_to_read', 'on_hold', 'dropped'],
+        required: true,
+      },
+      updatedAt: { type: Date, default: Date.now },
+    }],
     readingHistory: [{
       mangaId: String,
       chapterId: String,

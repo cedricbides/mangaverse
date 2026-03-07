@@ -1,3 +1,4 @@
+import Downloads from './pages/Downloads'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { AuthProvider } from '@/context/AuthContext'
 import Navbar from '@/components/Navbar'
@@ -36,6 +37,7 @@ export default function App() {
           <Route path="/read/:chapterId" element={<Reader />} />
           <Route path="/favorites" element={<Layout><Favorites /></Layout>} />
           <Route path="/profile" element={<Layout><Profile /></Layout>} />
+          <Route path="/downloads" element={<Layout><Downloads /></Layout>} />
           <Route path="/login" element={<Login />} />
           <Route path="/admin" element={<Layout><Admin /></Layout>} />
           <Route path="/local/:id" element={<Layout><LocalMangaDetail /></Layout>} />

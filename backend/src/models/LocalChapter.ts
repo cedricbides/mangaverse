@@ -7,6 +7,7 @@ export interface ILocalChapter extends Document {
   volume?: string
   pages: string[]   // array of image URLs
   language: string
+  draft: boolean
   createdAt: Date
 }
 
@@ -18,6 +19,7 @@ const LocalChapterSchema = new Schema<ILocalChapter>(
     volume: { type: String },
     pages: [{ type: String }],
     language: { type: String, default: 'en' },
+    draft: { type: Boolean, default: false },
   },
   { timestamps: true }
 )

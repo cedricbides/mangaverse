@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { Search, Menu, X, BookOpen, LogOut, User, Shield, Heart, Settings, Sun, Moon, BookMarked } from 'lucide-react'
+import { Search, Menu, X, BookOpen, LogOut, User, Shield, Heart, Settings, Sun, Moon, BookMarked, Download } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 
 // Generates a consistent avatar based on user's name
@@ -188,6 +188,13 @@ export default function Navbar() {
                       className="flex items-center gap-2 px-3 py-2.5 rounded-xl text-text-muted hover:text-text hover:bg-white/5 text-sm font-body transition-all">
                       <Heart size={15} />
                       Favorites
+                    </Link>
+                  )}
+                  {user && (
+                    <Link to="/downloads" onClick={() => setDropdownOpen(false)}
+                      className="flex items-center gap-2 px-3 py-2.5 rounded-xl text-text-muted hover:text-text hover:bg-white/5 text-sm font-body transition-all">
+                      <Download size={15} />
+                      Downloads
                     </Link>
                   )}
                 </div>

@@ -35,7 +35,6 @@ const LocalMangaSchema = new Schema<ILocalManga>(
   { timestamps: true }
 )
 
-LocalMangaSchema.index({ slug: 1 }, { unique: true })
 LocalMangaSchema.index({ createdAt: -1 })
 
 export default mongoose.model<ILocalManga>('LocalManga', LocalMangaSchema)

@@ -2,8 +2,25 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   Shield, Plus, Edit3, Trash2, BookOpen, Users, Layers,
-  ChevronDown, ChevronUp, X, Check, AlertCircle, Image, List, Upload, Loader, Activity, CheckCircle, XCircle, Clock, ChevronRight
+  ChevronDown, ChevronUp, X, Check, AlertCircle, Image, List, Upload, Loader, Activity, CheckCircle, XCircle, Clock, ChevronRight,
+  Search, Eye, FileText, Globe, Filter, TrendingUp, Calendar
 } from 'lucide-react'
+
+type MangaWithCounts = LocalManga & {
+  chapterCounts: { total: number; published: number; drafts: number; lastUpdated: string | null }
+}
+
+type MdxMangaEntry = {
+  mangaDexId: string
+  title: string
+  coverUrl: string
+  status: string
+  author: string
+  year?: number
+  pinned: boolean
+  chapterCounts: { total: number; published: number; drafts: number; lastUpdated: string | null }
+  source: 'mangadex'
+}
 import axios from 'axios'
 import { useAuth } from '@/context/AuthContext'
 import type { LocalManga, LocalChapter } from '@/types'
@@ -26,7 +43,16 @@ export default function Admin() {
   const navigate = useNavigate()
   const [activeTab, setActiveTab] = useState<'manga' | 'users' | 'stats'>('manga')
   const [stats, setStats] = useState({ userCount: 0, mangaCount: 0, chapterCount: 0, mdxPublished: 0, mdxDraft: 0, mdxManual: 0, mdxApi: 0, totalChapters: 0 })
-  const [mangaList, setMangaList] = useState<LocalManga[]>([])
+  const [mangaList, setMangaList] = useState<MangaWithCounts[]>([])
+  const [mdxMangaList, setMdxMangaList] = useState<MdxMangaEntry[]>([])
+  const [mdxMangaLoading, setMdxMangaLoading] = useState(false)
+  const [mdxSearchQuery, setMdxSearchQuery] = useState('')
+  const [mdxSearchResults, setMdxSearchResults] = useState<any[]>([])
+  const [mdxSearching, setMdxSearching] = useState(false)
+  const [mdxPinning, setMdxPinning] = useState<string | null>(null)
+  const [showMdxSearch, setShowMdxSearch] = useState(false)
+  const [mangaSearch, setMangaSearch] = useState('')
+  const [mangaStatusFilter, setMangaStatusFilter] = useState<string>('all')
   const [users, setUsers] = useState<any[]>([])
   const [loadingData, setLoadingData] = useState(false)
   const [expandedManga, setExpandedManga] = useState<string | null>(null)
@@ -72,11 +98,52 @@ export default function Admin() {
     if (!isAdmin) return
     axios.get('/api/admin/stats', { withCredentials: true }).then(res => setStats(res.data)).catch(() => {})
     loadManga()
+    loadMdxManga()
   }, [isAdmin])
+
+  const loadMdxManga = async () => {
+    setMdxMangaLoading(true)
+    try {
+      const res = await axios.get('/api/admin/mangadex-manga', { withCredentials: true })
+      setMdxMangaList(res.data)
+    } catch {}
+    setMdxMangaLoading(false)
+  }
+
+  const searchMdxManga = async () => {
+    if (!mdxSearchQuery.trim()) return
+    setMdxSearching(true)
+    setMdxSearchResults([])
+    try {
+      const res = await axios.get(`/api/admin/mangadex-manga/search?q=${encodeURIComponent(mdxSearchQuery)}`, { withCredentials: true })
+      setMdxSearchResults(res.data)
+    } catch { alert('Search failed') }
+    setMdxSearching(false)
+  }
+
+  const pinMdxManga = async (manga: any) => {
+    setMdxPinning(manga.mangaDexId)
+    try {
+      await axios.post('/api/admin/mangadex-manga/pin', manga, { withCredentials: true })
+      setMdxSearchResults([])
+      setMdxSearchQuery('')
+      setShowMdxSearch(false)
+      await loadMdxManga()
+    } catch { alert('Failed to pin manga') }
+    setMdxPinning(null)
+  }
+
+  const unpinMdxManga = async (mangaDexId: string) => {
+    if (!confirm('Remove this manga from your admin panel? (Chapters already added are kept)')) return
+    try {
+      await axios.delete(`/api/admin/mangadex-manga/pin/${mangaDexId}`, { withCredentials: true })
+      setMdxMangaList(prev => prev.filter(m => m.mangaDexId !== mangaDexId))
+    } catch { alert('Failed to unpin') }
+  }
 
   const loadManga = async () => {
     setLoadingData(true)
-    const res = await axios.get('/api/admin/manga', { withCredentials: true })
+    const res = await axios.get('/api/admin/manga-with-counts', { withCredentials: true })
     setMangaList(res.data)
     setLoadingData(false)
   }
@@ -283,112 +350,449 @@ export default function Admin() {
       </div>
 
       {/* MANGA TAB */}
-      {activeTab === 'manga' && (
-        <div>
-          <div className="flex justify-between items-center mb-4">
-            <p className="text-sm text-text-muted font-body">{mangaList.length} manga titles</p>
-            <button onClick={() => { setEditingManga(null); setShowMangaForm(true) }}
-              className="flex items-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary/90 text-white text-sm font-body rounded-xl transition-all">
-              <Plus size={15} /> Add Manga
-            </button>
-          </div>
+      {activeTab === 'manga' && (() => {
+        const filtered = mangaList
+          .filter(m => mangaStatusFilter === 'all' || m.status === mangaStatusFilter)
+          .filter(m => !mangaSearch || m.title.toLowerCase().includes(mangaSearch.toLowerCase()) || m.author?.toLowerCase().includes(mangaSearch.toLowerCase()))
 
-          {loadingData ? (
-            <div className="flex flex-col gap-3">
-              {[1,2,3].map(i => <div key={i} className="skeleton h-20 rounded-xl" />)}
-            </div>
-          ) : mangaList.length === 0 ? (
-            <div className="text-center py-20 glass rounded-2xl">
-              <BookOpen size={48} className="text-text-muted mx-auto mb-4 opacity-30" />
-              <p className="font-body text-text-muted mb-4">No manga added yet.</p>
+        const STATUS_BADGE: Record<string, string> = {
+          ongoing:   'text-green-400 bg-green-400/10 border-green-400/20',
+          completed: 'text-blue-400 bg-blue-400/10 border-blue-400/20',
+          hiatus:    'text-yellow-400 bg-yellow-400/10 border-yellow-400/20',
+          cancelled: 'text-red-400 bg-red-400/10 border-red-400/20',
+        }
+
+        const totalPublished = mangaList.reduce((s, m) => s + (m.chapterCounts?.published || 0), 0)
+        const totalDrafts    = mangaList.reduce((s, m) => s + (m.chapterCounts?.drafts    || 0), 0)
+        const totalChaps     = mangaList.reduce((s, m) => s + (m.chapterCounts?.total     || 0), 0)
+
+        return (
+          <div>
+            {/* Search + filter toolbar */}
+            <div className="flex flex-wrap items-center gap-3 mb-4">
+              <div className="flex-1 min-w-48 relative">
+                <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+                <input
+                  value={mangaSearch}
+                  onChange={e => setMangaSearch(e.target.value)}
+                  placeholder="Search by title or author…"
+                  className="w-full pl-9 pr-4 py-2.5 bg-white/5 border border-white/10 rounded-xl text-sm text-text font-body outline-none focus:border-primary/40 placeholder-text-muted/50"
+                />
+              </div>
+              <div className="flex items-center gap-1 bg-white/5 rounded-xl p-1">
+                {['all', 'ongoing', 'completed', 'hiatus', 'cancelled'].map(s => (
+                  <button key={s} onClick={() => setMangaStatusFilter(s)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-body capitalize transition-all ${mangaStatusFilter === s ? 'bg-primary text-white' : 'text-text-muted hover:text-text'}`}>
+                    {s}
+                  </button>
+                ))}
+              </div>
               <button onClick={() => { setEditingManga(null); setShowMangaForm(true) }}
-                className="px-5 py-2.5 bg-primary text-white font-body text-sm rounded-xl">
-                Add Your First Manga
+                className="flex items-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary/90 text-white text-sm font-body rounded-xl transition-all ml-auto">
+                <Plus size={15} /> Add Manga
               </button>
             </div>
-          ) : (
-            <div className="flex flex-col gap-3">
-              {mangaList.map(manga => (
-                <div key={manga._id} className="glass rounded-2xl overflow-hidden">
-                  {/* Manga Row */}
-                  <div className="flex items-center gap-4 p-4">
-                    <img src={manga.coverUrl} alt={manga.title}
-                      className="w-12 h-16 object-cover rounded-xl flex-shrink-0"
-                      onError={e => (e.currentTarget.src = 'https://placehold.co/48x64/1a1a2e/white?text=No+Cover')} />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <h3 className="font-body text-text font-medium line-clamp-1">{manga.title}</h3>
-                        {manga.featured && <span className="text-xs px-2 py-0.5 bg-amber-500/20 text-amber-400 rounded-full">Featured</span>}
-                      </div>
-                      <p className="text-xs text-text-muted font-body mt-0.5">
-                        {manga.status} · {manga.genres.slice(0, 3).join(', ')} · {manga.views} views
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      <button onClick={() => { setShowChapterForm(manga._id) }}
-                        className="flex items-center gap-1.5 px-3 py-1.5 bg-accent/20 border border-accent/30 text-accent text-xs font-body rounded-lg hover:bg-accent/30 transition-colors">
-                        <Plus size={12} /> Chapter
-                      </button>
-                      <button onClick={() => { setEditingManga(manga); setShowMangaForm(true) }}
-                        className="p-2 glass rounded-lg text-text-muted hover:text-text transition-colors">
-                        <Edit3 size={14} />
-                      </button>
-                      <button onClick={() => deleteManga(manga._id)}
-                        className="p-2 glass rounded-lg text-text-muted hover:text-red-400 transition-colors">
-                        <Trash2 size={14} />
-                      </button>
-                      <button onClick={() => toggleExpand(manga._id)}
-                        className="p-2 glass rounded-lg text-text-muted hover:text-text transition-colors">
-                        {expandedManga === manga._id ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                      </button>
-                    </div>
-                  </div>
 
-                  {/* Chapters Expand */}
-                  {expandedManga === manga._id && (
-                    <div className="border-t border-white/5 bg-black/20 p-4">
-                      <div className="flex items-center justify-between mb-3">
-                        <p className="text-xs text-text-muted font-body uppercase tracking-widest">Chapters ({chapters[manga._id]?.length || 0})</p>
-                        <button onClick={() => setShowChapterForm(manga._id)}
-                          className="flex items-center gap-1 text-xs text-accent hover:underline font-body">
-                          <Plus size={11} /> Add Chapter
-                        </button>
+            {/* ── LOCAL MANGA section header ── */}
+            <div className="flex items-center justify-between glass rounded-2xl px-5 py-3.5 mb-3 border border-white/5">
+              <div className="flex items-center gap-3">
+                <div className="w-1.5 h-5 bg-primary rounded-full" />
+                <span className="font-display text-base text-white tracking-wide">LOCAL MANGA</span>
+                <span className="text-xs text-text-muted font-body">{mangaList.length} titles</span>
+              </div>
+              <div className="flex items-center gap-1 text-xs font-body divide-x divide-white/10">
+                <span className="pr-3 text-text-muted">
+                  <span className="text-white font-semibold">{totalChaps}</span> chapters
+                </span>
+                <span className="px-3 text-green-400">
+                  <span className="font-semibold">{totalPublished}</span> published
+                </span>
+                <span className="pl-3 text-yellow-400">
+                  <span className="font-semibold">{totalDrafts}</span> draft
+                </span>
+              </div>
+            </div>
+
+            {loadingData ? (
+              <div className="flex flex-col gap-3">
+                {[1,2,3,4].map(i => <div key={i} className="skeleton h-24 rounded-2xl" />)}
+              </div>
+            ) : filtered.length === 0 ? (
+              <div className="text-center py-20 glass rounded-2xl">
+                <BookOpen size={48} className="text-text-muted mx-auto mb-4 opacity-30" />
+                <p className="font-body text-text-muted mb-4">{mangaList.length === 0 ? 'No manga added yet.' : 'No results match your filters.'}</p>
+                {mangaList.length === 0 && (
+                  <button onClick={() => { setEditingManga(null); setShowMangaForm(true) }}
+                    className="px-5 py-2.5 bg-primary text-white font-body text-sm rounded-xl">
+                    Add Your First Manga
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="flex flex-col gap-3">
+                {filtered.map(manga => {
+                  const counts = manga.chapterCounts || { total: 0, published: 0, drafts: 0, lastUpdated: null }
+                  const isExpanded = expandedManga === manga._id
+
+                  return (
+                    <div key={manga._id} className="glass rounded-2xl overflow-hidden border border-white/5 hover:border-white/10 transition-colors">
+                      {/* Main Row */}
+                      <div className="flex items-center gap-4 p-4">
+                        {/* Cover */}
+                        <img src={manga.coverUrl} alt={manga.title}
+                          className="w-12 h-16 object-cover rounded-xl flex-shrink-0 shadow-lg"
+                          onError={e => (e.currentTarget.src = 'https://placehold.co/48x64/1a1a2e/white?text=?')} />
+
+                        {/* Title + meta */}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap mb-1">
+                            <h3 className="font-body text-text font-semibold line-clamp-1">{manga.title}</h3>
+                            <span className={`text-[10px] px-2 py-0.5 rounded-full border font-body capitalize ${STATUS_BADGE[manga.status] || 'text-text-muted bg-white/5 border-white/10'}`}>
+                              {manga.status}
+                            </span>
+                            {manga.featured && (
+                              <span className="text-[10px] px-2 py-0.5 bg-amber-500/20 text-amber-400 border border-amber-500/20 rounded-full font-body">★ Featured</span>
+                            )}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-text-muted font-body">
+                            {manga.author && <span className="flex items-center gap-1"><Users size={10} />{manga.author}</span>}
+                            {manga.year && <span className="flex items-center gap-1"><Calendar size={10} />{manga.year}</span>}
+                            <span className="flex items-center gap-1"><Eye size={10} />{manga.views.toLocaleString()} views</span>
+                            {counts.lastUpdated && (
+                              <span className="flex items-center gap-1 text-text-muted/60">
+                                Updated {new Date(counts.lastUpdated).toLocaleDateString()}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Chapter stats pills */}
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <div className="flex items-center gap-1.5 bg-white/5 rounded-xl px-3 py-2 border border-white/5">
+                            <Layers size={12} className="text-text-muted" />
+                            <span className="text-sm font-body font-semibold text-white">{counts.total}</span>
+                            <span className="text-xs text-text-muted font-body">total</span>
+                          </div>
+                          <div className="flex items-center gap-1.5 bg-green-500/10 rounded-xl px-3 py-2 border border-green-500/20">
+                            <Globe size={12} className="text-green-400" />
+                            <span className="text-sm font-body font-semibold text-green-400">{counts.published}</span>
+                            <span className="text-xs text-green-400/60 font-body">pub</span>
+                          </div>
+                          {counts.drafts > 0 && (
+                            <div className="flex items-center gap-1.5 bg-yellow-500/10 rounded-xl px-3 py-2 border border-yellow-500/20">
+                              <FileText size={12} className="text-yellow-400" />
+                              <span className="text-sm font-body font-semibold text-yellow-400">{counts.drafts}</span>
+                              <span className="text-xs text-yellow-400/60 font-body">draft</span>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Actions */}
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                          <button onClick={() => setShowChapterForm(manga._id)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-accent/20 border border-accent/30 text-accent text-xs font-body rounded-lg hover:bg-accent/30 transition-colors">
+                            <Plus size={12} /> Chapter
+                          </button>
+                          <Link to={`/manga/local/${manga._id}`} target="_blank"
+                            className="p-2 glass rounded-lg text-text-muted hover:text-blue-400 transition-colors" title="View page">
+                            <Eye size={14} />
+                          </Link>
+                          <button onClick={() => { setEditingManga(manga); setShowMangaForm(true) }}
+                            className="p-2 glass rounded-lg text-text-muted hover:text-text transition-colors" title="Edit">
+                            <Edit3 size={14} />
+                          </button>
+                          <button onClick={() => deleteManga(manga._id)}
+                            className="p-2 glass rounded-lg text-text-muted hover:text-red-400 transition-colors" title="Delete">
+                            <Trash2 size={14} />
+                          </button>
+                          <button onClick={() => toggleExpand(manga._id)}
+                            className={`p-2 glass rounded-lg transition-colors ${isExpanded ? 'text-primary bg-primary/10' : 'text-text-muted hover:text-text'}`}
+                            title="Show chapters">
+                            {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                          </button>
+                        </div>
                       </div>
-                      {!chapters[manga._id] ? (
-                        <p className="text-xs text-text-muted font-body">Loading...</p>
-                      ) : chapters[manga._id].length === 0 ? (
-                        <p className="text-xs text-text-muted font-body">No chapters yet.</p>
-                      ) : (
-                        <div className="flex flex-col gap-2">
-                          {chapters[manga._id].map(ch => (
-                            <div key={ch._id} className="flex items-center justify-between bg-white/5 rounded-xl px-4 py-2.5">
-                              <div>
-                                <span className="text-sm text-text font-body">
-                                  {ch.volume && `Vol.${ch.volume} `}Ch.{ch.chapterNumber}
-                                  {ch.title && <span className="text-text-muted"> — {ch.title}</span>}
-                                </span>
-                                <span className="ml-3 text-xs text-text-muted">{ch.pages.length} pages</span>
-                              </div>
+
+                      {/* Chapters Expand */}
+                      {isExpanded && (
+                        <div className="border-t border-white/5 bg-black/20">
+                          {/* Chapter list header */}
+                          <div className="flex items-center justify-between px-5 py-3 border-b border-white/5">
+                            <div className="flex items-center gap-3">
+                              <span className="text-xs text-text-muted font-body uppercase tracking-widest">
+                                Chapters
+                              </span>
                               <div className="flex items-center gap-2">
-                                <Link to={`/read/local/${ch._id}`}
-                                  className="text-xs text-accent hover:underline font-body">Preview</Link>
-                                <button onClick={() => deleteChapter(manga._id, ch._id)}
-                                  className="p-1 text-text-muted hover:text-red-400 transition-colors">
-                                  <Trash2 size={12} />
-                                </button>
+                                <span className="text-xs px-2 py-0.5 bg-green-500/10 text-green-400 border border-green-500/20 rounded-full font-body">
+                                  {counts.published} published
+                                </span>
+                                {counts.drafts > 0 && (
+                                  <span className="text-xs px-2 py-0.5 bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 rounded-full font-body">
+                                    {counts.drafts} draft
+                                  </span>
+                                )}
                               </div>
                             </div>
-                          ))}
+                            <button onClick={() => setShowChapterForm(manga._id)}
+                              className="flex items-center gap-1 text-xs text-accent hover:underline font-body">
+                              <Plus size={11} /> Add Chapter
+                            </button>
+                          </div>
+
+                          <div className="p-4">
+                            {!chapters[manga._id] ? (
+                              <div className="flex items-center gap-2 text-xs text-text-muted font-body py-2">
+                                <Loader size={12} className="animate-spin" /> Loading chapters…
+                              </div>
+                            ) : chapters[manga._id].length === 0 ? (
+                              <p className="text-xs text-text-muted font-body py-2">No chapters yet. Add one above!</p>
+                            ) : (
+                              <div className="flex flex-col gap-1.5">
+                                {[...chapters[manga._id]].reverse().map((ch, i) => (
+                                  <div key={ch._id} className="flex items-center justify-between bg-white/5 hover:bg-white/8 rounded-xl px-4 py-2.5 transition-colors group">
+                                    <div className="flex items-center gap-3 min-w-0">
+                                      <span className="text-xs font-mono text-text-muted w-5 shrink-0">{chapters[manga._id].length - i}</span>
+                                      <div className="min-w-0">
+                                        <span className="text-sm text-text font-body">
+                                          {ch.volume && <span className="text-text-muted">Vol.{ch.volume} </span>}
+                                          Ch.{ch.chapterNumber}
+                                          {ch.title && <span className="text-text-muted"> — {ch.title}</span>}
+                                        </span>
+                                        <div className="flex items-center gap-3 mt-0.5">
+                                          <span className="text-xs text-text-muted font-body">{ch.pages.length} pages</span>
+                                          <span className="text-xs text-text-muted/60 font-body">{new Date(ch.createdAt).toLocaleDateString()}</span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                      <Link to={`/read/local/${ch._id}`}
+                                        className="text-xs text-accent hover:underline font-body flex items-center gap-1">
+                                        <Eye size={11} /> Preview
+                                      </Link>
+                                      <button onClick={() => deleteChapter(manga._id, ch._id)}
+                                        className="p-1 text-text-muted hover:text-red-400 transition-colors">
+                                        <Trash2 size={12} />
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                         </div>
                       )}
                     </div>
-                  )}
-                </div>
-              ))}
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )
+      })()}
+
+      {/* MANGADEX MANGA SECTION (shown inside manga tab) */}
+      {activeTab === 'manga' && (() => {
+        const STATUS_BADGE: Record<string, string> = {
+          ongoing:   'text-green-400 bg-green-400/10 border-green-400/20',
+          completed: 'text-blue-400 bg-blue-400/10 border-blue-400/20',
+          hiatus:    'text-yellow-400 bg-yellow-400/10 border-yellow-400/20',
+          cancelled: 'text-red-400 bg-red-400/10 border-red-400/20',
+        }
+        const filtered = mdxMangaList.filter(m =>
+          !mangaSearch || m.title.toLowerCase().includes(mangaSearch.toLowerCase()) || m.author?.toLowerCase().includes(mangaSearch.toLowerCase())
+        )
+
+        const mdxTotalPublished = mdxMangaList.reduce((s, m) => s + (m.chapterCounts?.published || 0), 0)
+        const mdxTotalDrafts    = mdxMangaList.reduce((s, m) => s + (m.chapterCounts?.drafts    || 0), 0)
+        const mdxTotalChaps     = mdxMangaList.reduce((s, m) => s + (m.chapterCounts?.total     || 0), 0)
+        const alreadyPinnedIds  = new Set(mdxMangaList.map(m => m.mangaDexId))
+
+        return (
+          <div className="mt-6">
+            {/* ── MANGADEX section header ── */}
+            <div className="flex items-center justify-between glass rounded-2xl px-5 py-3.5 mb-3 border border-orange-400/10">
+              <div className="flex items-center gap-3">
+                <div className="w-1.5 h-5 bg-orange-400 rounded-full" />
+                <span className="font-display text-base text-white tracking-wide">MANGADEX TITLES</span>
+                <span className="text-xs text-text-muted font-body">
+                  {mdxMangaLoading ? 'Loading…' : `${mdxMangaList.length} titles`}
+                </span>
+              </div>
+              <div className="flex items-center gap-3">
+                {!mdxMangaLoading && mdxMangaList.length > 0 && (
+                  <div className="flex items-center gap-1 text-xs font-body divide-x divide-white/10">
+                    <span className="pr-3 text-text-muted">
+                      <span className="text-white font-semibold">{mdxTotalChaps}</span> chapters
+                    </span>
+                    <span className="px-3 text-green-400">
+                      <span className="font-semibold">{mdxTotalPublished}</span> published
+                    </span>
+                    <span className="pl-3 text-yellow-400">
+                      <span className="font-semibold">{mdxTotalDrafts}</span> draft
+                    </span>
+                  </div>
+                )}
+                <button
+                  onClick={() => { setShowMdxSearch(v => !v); setMdxSearchResults([]); setMdxSearchQuery('') }}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-body border transition-all ${showMdxSearch ? 'bg-orange-500/20 border-orange-500/40 text-orange-400' : 'glass border-white/10 text-text-muted hover:text-orange-400 hover:border-orange-400/30'}`}>
+                  <Plus size={12} /> Add MangaDex Title
+                </button>
+              </div>
             </div>
-          )}
-        </div>
-      )}
+
+            {/* ── Search panel ── */}
+            {showMdxSearch && (
+              <div className="glass rounded-2xl p-4 mb-3 border border-orange-400/20">
+                <p className="text-xs text-text-muted font-body mb-3">
+                  Search for any MangaDex manga to add it to your admin panel. This only tracks it here — it won't affect the site catalog.
+                </p>
+                <div className="flex gap-2 mb-3">
+                  <input
+                    value={mdxSearchQuery}
+                    onChange={e => setMdxSearchQuery(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && searchMdxManga()}
+                    placeholder="e.g. Solo Leveling, One Piece…"
+                    className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-text font-body outline-none focus:border-orange-400/40"
+                  />
+                  <button onClick={searchMdxManga} disabled={mdxSearching || !mdxSearchQuery.trim()}
+                    className="px-4 py-2.5 bg-orange-500 hover:bg-orange-500/90 text-white text-sm font-body rounded-xl disabled:opacity-50 flex items-center gap-2 transition-all whitespace-nowrap">
+                    {mdxSearching ? <><Loader size={13} className="animate-spin" /> Searching…</> : <><Search size={13} /> Search</>}
+                  </button>
+                </div>
+
+                {mdxSearchResults.length > 0 && (
+                  <div className="flex flex-col gap-2 max-h-72 overflow-y-auto">
+                    {mdxSearchResults.map(result => {
+                      const alreadyAdded = alreadyPinnedIds.has(result.mangaDexId)
+                      return (
+                        <div key={result.mangaDexId} className="flex items-center gap-3 bg-white/5 rounded-xl px-3 py-2.5">
+                          <img src={result.coverUrl} alt={result.title}
+                            className="w-8 h-11 object-cover rounded-lg flex-shrink-0"
+                            onError={e => (e.currentTarget.src = 'https://placehold.co/32x44/1a1a2e/white?text=?')} />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm text-text font-body font-medium line-clamp-1">{result.title}</p>
+                            <div className="flex items-center gap-2 text-xs text-text-muted font-body mt-0.5">
+                              {result.author && <span>{result.author}</span>}
+                              {result.year && <span>· {result.year}</span>}
+                              <span className={`capitalize px-1.5 py-0.5 rounded text-[10px] ${STATUS_BADGE[result.status] || 'text-text-muted bg-white/5'}`}>
+                                {result.status}
+                              </span>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => !alreadyAdded && pinMdxManga(result)}
+                            disabled={alreadyAdded || mdxPinning === result.mangaDexId}
+                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-body border transition-all shrink-0 ${
+                              alreadyAdded
+                                ? 'bg-green-500/10 border-green-500/20 text-green-400 cursor-default'
+                                : 'bg-orange-500/20 border-orange-500/40 text-orange-400 hover:bg-orange-500/30 disabled:opacity-50'
+                            }`}>
+                            {mdxPinning === result.mangaDexId
+                              ? <><Loader size={11} className="animate-spin" /> Adding…</>
+                              : alreadyAdded
+                                ? <><Check size={11} /> Added</>
+                                : <><Plus size={11} /> Add</>
+                            }
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── List ── */}
+            {mdxMangaLoading ? (
+              <div className="flex flex-col gap-3">
+                {[1,2].map(i => <div key={i} className="skeleton h-24 rounded-2xl" />)}
+              </div>
+            ) : filtered.length === 0 ? (
+              <div className="text-center py-10 glass rounded-2xl border border-orange-400/10">
+                <BookOpen size={32} className="text-text-muted mx-auto mb-3 opacity-30" />
+                <p className="font-body text-text-muted text-sm">No MangaDex titles tracked yet.</p>
+                <p className="font-body text-text-muted/60 text-xs mt-1">Use "Add MangaDex Title" above, or they appear automatically when you import chapters.</p>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-3">
+                {filtered.map(manga => {
+                  const counts = manga.chapterCounts
+                  return (
+                    <div key={manga.mangaDexId} className="glass rounded-2xl overflow-hidden border border-orange-400/10 hover:border-orange-400/20 transition-colors">
+                      <div className="flex items-center gap-4 p-4">
+                        <img src={manga.coverUrl} alt={manga.title}
+                          className="w-12 h-16 object-cover rounded-xl flex-shrink-0 shadow-lg"
+                          onError={e => (e.currentTarget.src = 'https://placehold.co/48x64/1a1a2e/white?text=MDX')} />
+
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap mb-1">
+                            <h3 className="font-body text-text font-semibold line-clamp-1">{manga.title}</h3>
+                            <span className={`text-[10px] px-2 py-0.5 rounded-full border font-body capitalize ${STATUS_BADGE[manga.status] || 'text-text-muted bg-white/5 border-white/10'}`}>
+                              {manga.status}
+                            </span>
+                            <span className="text-[10px] px-2 py-0.5 bg-orange-500/20 text-orange-400 border border-orange-500/20 rounded-full font-body">
+                              MangaDex
+                            </span>
+                            {manga.pinned && (
+                              <span className="text-[10px] px-2 py-0.5 bg-white/5 text-text-muted border border-white/10 rounded-full font-body">
+                                📌 pinned
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-text-muted font-body">
+                            {manga.author && <span className="flex items-center gap-1"><Users size={10} />{manga.author}</span>}
+                            {manga.year && <span className="flex items-center gap-1"><Calendar size={10} />{manga.year}</span>}
+                            {counts.lastUpdated && (
+                              <span className="text-text-muted/60">Updated {new Date(counts.lastUpdated).toLocaleDateString()}</span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <div className="flex items-center gap-1.5 bg-white/5 rounded-xl px-3 py-2 border border-white/5">
+                            <Layers size={12} className="text-text-muted" />
+                            <span className="text-sm font-body font-semibold text-white">{counts.total}</span>
+                            <span className="text-xs text-text-muted font-body">total</span>
+                          </div>
+                          <div className="flex items-center gap-1.5 bg-green-500/10 rounded-xl px-3 py-2 border border-green-500/20">
+                            <Globe size={12} className="text-green-400" />
+                            <span className="text-sm font-body font-semibold text-green-400">{counts.published}</span>
+                            <span className="text-xs text-green-400/60 font-body">pub</span>
+                          </div>
+                          {counts.drafts > 0 && (
+                            <div className="flex items-center gap-1.5 bg-yellow-500/10 rounded-xl px-3 py-2 border border-yellow-500/20">
+                              <FileText size={12} className="text-yellow-400" />
+                              <span className="text-sm font-body font-semibold text-yellow-400">{counts.drafts}</span>
+                              <span className="text-xs text-yellow-400/60 font-body">draft</span>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                          <Link to={`/manga/${manga.mangaDexId}`} target="_blank"
+                            className="p-2 glass rounded-lg text-text-muted hover:text-blue-400 transition-colors" title="View manga page">
+                            <Eye size={14} />
+                          </Link>
+                          <a href={`https://mangadex.org/title/${manga.mangaDexId}`} target="_blank" rel="noopener noreferrer"
+                            className="p-2 glass rounded-lg text-text-muted hover:text-orange-400 transition-colors" title="Open on MangaDex">
+                            <Globe size={14} />
+                          </a>
+                          {manga.pinned && (
+                            <button onClick={() => unpinMdxManga(manga.mangaDexId)}
+                              className="p-2 glass rounded-lg text-text-muted hover:text-red-400 transition-colors" title="Unpin from admin">
+                              <Trash2 size={14} />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )
+      })()}
 
       {/* USERS TAB */}
       {activeTab === 'users' && (

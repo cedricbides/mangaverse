@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import ReadingListButton from '@/components/ReadingListButton'
 import RatingReviews from '@/components/RatingReviews'
+import DownloadChapterButton from '@/components/DownloadChapterButton'
 import { useParams, Link } from 'react-router-dom'
 import { Heart, BookOpen, Eye, Calendar, ChevronRight, User, Trash2 } from 'lucide-react'
 import axios from 'axios'
@@ -183,6 +184,10 @@ export default function LocalMangaDetail() {
                     <ChevronRight size={14} className="text-text-muted group-hover:text-primary transition-colors" />
                   </div>
                 </Link>
+                <DownloadChapterButton
+                  pages={ch.pages}
+                  label={`${manga.title} - Chapter ${ch.chapterNumber}${ch.title ? ' - ' + ch.title : ''}`}
+                />
                 {/* Admin: delete button */}
                 {isAdmin && (
                   <button
