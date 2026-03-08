@@ -22,7 +22,7 @@ export default function Navbar() {
     return (localStorage.getItem('theme') as Theme) || 'dark'
   })
 
-  // ✅ Apply theme class to <html> whenever it changes
+  // Apply theme class to <html> whenever it changes
   useEffect(() => {
     const html = document.documentElement
     html.classList.remove('theme-dark', 'theme-dim', 'theme-light')

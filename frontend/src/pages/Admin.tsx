@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
   Shield, Plus, Edit3, Trash2, BookOpen, Users, Layers,
   ChevronDown, ChevronUp, X, Check, AlertCircle, Image, List,
-  TrendingUp, Eye, Heart, BarChart2, RefreshCw
+  TrendingUp, Eye, Heart, BarChart2, RefreshCw, Clock, ArrowUpDown,
+  CalendarDays, Activity, Radio, Wifi
 } from 'lucide-react'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -11,7 +12,10 @@ import {
 } from 'recharts'
 import axios from 'axios'
 import { useAuth } from '@/context/AuthContext'
-import type { LocalManga, LocalChapter } from '@/types'
+import type { LocalManga, LocalChapter, Manga } from '@/types'
+import { getCoverUrl, getMangaTitle, getMangaTags } from '@/utils/manga'
+
+const MD = 'https://api.mangadex.org'
 
 const GENRES = [
   'Action','Adventure','Comedy','Drama','Fantasy','Horror','Mystery',
@@ -24,7 +28,6 @@ const STATUS_COLORS: Record<string, string> = {
   ongoing: '#10b981', completed: '#3b82f6', hiatus: '#f59e0b', cancelled: '#ef4444'
 }
 
-// ── Tooltip styles ────────────────────────────────────────────────────────────
 const TooltipStyle = {
   contentStyle: { background: '#13131f', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12, fontSize: 12, fontFamily: 'var(--font-body)' },
   labelStyle: { color: '#9ca3af' },
@@ -65,6 +68,27 @@ export default function Admin() {
   const [editingManga, setEditingManga] = useState<LocalManga | null>(null)
   const [showChapterForm, setShowChapterForm] = useState<string | null>(null)
 
+  // Live monitoring
+  const [liveEnabled, setLiveEnabled] = useState(true)
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null)
+  const [newlyDetected, setNewlyDetected] = useState<Set<string>>(new Set())
+  const [refreshing, setRefreshing] = useState(false)
+  const [secondsSince, setSecondsSince] = useState(0)
+  const prevIdsRef = useRef<Set<string>>(new Set())
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const [analyticsError, setAnalyticsError] = useState('')
+  const [sortBy, setSortBy] = useState<'newest' | 'oldest' | 'title-az' | 'title-za' | 'most-views'>('newest')
+  const [showLog, setShowLog] = useState(false)
+
+  // API manga from MangaDex
+  const [apiManga, setApiManga] = useState<Manga[]>([])
+  const [apiTotal, setApiTotal] = useState(0)
+  const [apiPage, setApiPage] = useState(0)
+  const [apiSearch, setApiSearch] = useState('')
+  const [loadingApi, setLoadingApi] = useState(false)
+  const [mangaSource, setMangaSource] = useState<'all' | 'api' | 'local'>('all')
+
   useEffect(() => {
     if (!loading && !isAdmin) navigate('/')
   }, [loading, isAdmin, navigate])
@@ -75,10 +99,67 @@ export default function Admin() {
     loadManga()
   }, [isAdmin])
 
+  // Tick counter
+  useEffect(() => {
+    const tick = setInterval(() => {
+      if (lastRefreshed) {
+        setSecondsSince(Math.floor((Date.now() - lastRefreshed.getTime()) / 1000))
+      }
+    }, 1000)
+    return () => clearInterval(tick)
+  }, [lastRefreshed])
+
+  // Silent background poll
+  const silentRefresh = useCallback(async () => {
+    if (refreshing) return
+    setRefreshing(true)
+    try {
+      const [mangaRes, statsRes] = await Promise.all([
+        axios.get('/api/admin/manga', { withCredentials: true }),
+        axios.get('/api/admin/stats', { withCredentials: true }),
+      ])
+      const freshList: LocalManga[] = mangaRes.data
+      const freshIds = new Set(freshList.map(m => m._id))
+
+      const added = freshList.filter(m => !prevIdsRef.current.has(m._id)).map(m => m._id)
+      if (added.length > 0) {
+        setNewlyDetected(prev => new Set([...prev, ...added]))
+        setTimeout(() => {
+          setNewlyDetected(prev => {
+            const next = new Set(prev)
+            added.forEach(id => next.delete(id))
+            return next
+          })
+        }, 8000)
+      }
+
+      prevIdsRef.current = freshIds
+      setMangaList(freshList)
+      setStats(statsRes.data)
+      setLastRefreshed(new Date())
+      setSecondsSince(0)
+    } catch (_) {}
+    setRefreshing(false)
+  }, [refreshing])
+
+  // Start / stop polling interval
+  useEffect(() => {
+    if (liveEnabled) {
+      pollRef.current = setInterval(silentRefresh, 30000)
+    } else {
+      if (pollRef.current) clearInterval(pollRef.current)
+    }
+    return () => { if (pollRef.current) clearInterval(pollRef.current) }
+  }, [liveEnabled, silentRefresh])
+
   const loadManga = async () => {
     setLoadingData(true)
     const res = await axios.get('/api/admin/manga', { withCredentials: true })
-    setMangaList(res.data)
+    const list: LocalManga[] = res.data
+    prevIdsRef.current = new Set(list.map(m => m._id))
+    setMangaList(list)
+    setLastRefreshed(new Date())
+    setSecondsSince(0)
     setLoadingData(false)
   }
 
@@ -88,8 +169,6 @@ export default function Admin() {
     setUsers(res.data)
     setLoadingData(false)
   }
-
-  const [analyticsError, setAnalyticsError] = useState('')
 
   const loadAnalytics = async () => {
     setLoadingAnalytics(true)
@@ -103,6 +182,34 @@ export default function Admin() {
       setLoadingAnalytics(false)
     }
   }
+
+  const loadApiManga = async (page = 0, search = '') => {
+    setLoadingApi(true)
+    try {
+      const qp = new URLSearchParams()
+      qp.set('limit', '24')
+      qp.set('offset', String(page * 24))
+      qp.set('includes[]', 'cover_art')
+      qp.set('contentRating[]', 'safe')
+      qp.set('hasAvailableChapters', 'true')
+      qp.set('order[latestUploadedChapter]', 'desc')
+      if (search.trim()) qp.set('title', search.trim())
+      const res = await axios.get(`${MD}/manga?${qp}`)
+      setApiManga(res.data.data)
+      setApiTotal(res.data.total)
+    } catch (_) {}
+    setLoadingApi(false)
+  }
+
+  useEffect(() => {
+    if (isAdmin) loadApiManga(apiPage, apiSearch)
+  }, [isAdmin, apiPage])
+
+  // Debounced API search
+  useEffect(() => {
+    const t = setTimeout(() => { setApiPage(0); loadApiManga(0, apiSearch) }, 500)
+    return () => clearTimeout(t)
+  }, [apiSearch])
 
   const loadChapters = async (mangaId: string) => {
     if (chapters[mangaId]) return
@@ -196,102 +303,310 @@ export default function Admin() {
       {/* ── MANGA TAB ─────────────────────────────────────────────────────────── */}
       {activeTab === 'manga' && (
         <div>
-          <div className="flex justify-between items-center mb-4">
-            <p className="text-sm text-text-muted font-body">{mangaList.length} manga titles</p>
-            <button onClick={() => { setEditingManga(null); setShowMangaForm(true) }}
-              className="flex items-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary/90 text-white text-sm font-body rounded-xl transition-all">
-              <Plus size={15} /> Add Manga
-            </button>
-          </div>
-
-          {loadingData ? (
-            <div className="flex flex-col gap-3">
-              {[1,2,3].map(i => <div key={i} className="skeleton h-20 rounded-xl" />)}
-            </div>
-          ) : mangaList.length === 0 ? (
-            <div className="text-center py-20 glass rounded-2xl">
-              <BookOpen size={48} className="text-text-muted mx-auto mb-4 opacity-30" />
-              <p className="font-body text-text-muted mb-4">No manga added yet.</p>
-              <button onClick={() => { setEditingManga(null); setShowMangaForm(true) }}
-                className="px-5 py-2.5 bg-primary text-white font-body text-sm rounded-xl">
-                Add Your First Manga
+          {/* ── LIVE MONITOR BAR ─────────────────────────────────────────── */}
+          <div className="flex items-center justify-between glass rounded-2xl px-4 py-3 mb-4 border border-white/5">
+            <div className="flex items-center gap-3">
+              <div className="relative flex items-center gap-2">
+                {liveEnabled ? (
+                  <>
+                    <span className="relative flex h-2.5 w-2.5">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-400" />
+                    </span>
+                    <span className="text-xs font-body text-emerald-400 font-semibold tracking-widest uppercase">Live</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-text-muted opacity-40" />
+                    <span className="text-xs font-body text-text-muted tracking-widest uppercase">Paused</span>
+                  </>
+                )}
+              </div>
+              <div className="w-px h-4 bg-white/10" />
+              <span className="text-xs text-text-muted font-body">
+                {lastRefreshed ? (secondsSince < 5 ? <span className="text-emerald-400">Just refreshed</span> : `Updated ${secondsSince}s ago`) : 'Loading...'}
+              </span>
+              <button onClick={silentRefresh} disabled={refreshing} className="p-1 text-text-muted hover:text-text transition-colors disabled:opacity-40">
+                <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} />
               </button>
             </div>
-          ) : (
-            <div className="flex flex-col gap-3">
-              {mangaList.map(manga => (
-                <div key={manga._id} className="glass rounded-2xl overflow-hidden">
-                  <div className="flex items-center gap-4 p-4">
-                    <img src={manga.coverUrl} alt={manga.title}
-                      className="w-12 h-16 object-cover rounded-xl flex-shrink-0"
-                      onError={e => (e.currentTarget.src = 'https://placehold.co/48x64/1a1a2e/white?text=No+Cover')} />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <h3 className="font-body text-text font-medium line-clamp-1">{manga.title}</h3>
-                        {manga.featured && <span className="text-xs px-2 py-0.5 bg-amber-500/20 text-amber-400 rounded-full">Featured</span>}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-text-muted font-body">Auto-refresh 30s</span>
+              <button onClick={() => setLiveEnabled(v => !v)} className={`relative w-9 h-5 rounded-full transition-colors ${liveEnabled ? 'bg-emerald-500' : 'bg-white/10'}`}>
+                <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${liveEnabled ? 'translate-x-4' : 'translate-x-0'}`} />
+              </button>
+            </div>
+          </div>
+
+          {/* ── SOURCE FILTER + SEARCH ───────────────────────────────────── */}
+          <div className="flex flex-wrap items-center gap-3 mb-4">
+            <div className="flex gap-1 glass rounded-xl p-1 border border-white/10">
+              {([
+                ['all', 'All on Site'],
+                ['api', 'MangaDex API'],
+                ['local', 'Manually Added'],
+              ] as const).map(([src, label]) => (
+                <button key={src} onClick={() => setMangaSource(src)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-body transition-all ${mangaSource === src ? 'bg-primary text-white' : 'text-text-muted hover:text-text'}`}>
+                  {label}
+                  {src === 'api' && <span className="ml-1 opacity-60">{apiTotal > 0 ? apiTotal.toLocaleString() : ''}</span>}
+                  {src === 'local' && <span className="ml-1 opacity-60">{mangaList.length}</span>}
+                </button>
+              ))}
+            </div>
+
+            {mangaSource !== 'local' && (
+              <input
+                value={apiSearch}
+                onChange={e => setApiSearch(e.target.value)}
+                placeholder="Search MangaDex titles..."
+                className="flex-1 min-w-[160px] bg-white/5 border border-white/10 rounded-xl px-4 py-2 text-sm text-text font-body outline-none focus:border-primary/40 placeholder:text-text-muted"
+              />
+            )}
+
+            {mangaSource !== 'api' && (
+              <div className="flex items-center gap-2 glass rounded-xl px-3 py-2 border border-white/10">
+                <ArrowUpDown size={13} className="text-text-muted" />
+                <select value={sortBy} onChange={e => setSortBy(e.target.value as typeof sortBy)}
+                  className="bg-transparent text-sm font-body text-text-muted outline-none cursor-pointer">
+                  <option value="newest">Newest Added</option>
+                  <option value="oldest">Oldest Added</option>
+                  <option value="title-az">Title A → Z</option>
+                  <option value="title-za">Title Z → A</option>
+                  <option value="most-views">Most Views</option>
+                </select>
+              </div>
+            )}
+
+            <button onClick={() => setShowLog(v => !v)}
+              className={`flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-body border transition-all ${showLog ? 'bg-purple-500/20 border-purple-500/30 text-purple-300' : 'glass border-white/10 text-text-muted hover:text-text'}`}>
+              <Activity size={13} /> Activity Log
+            </button>
+
+            {mangaSource !== 'api' && (
+              <button onClick={() => { setEditingManga(null); setShowMangaForm(true) }}
+                className="flex items-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary/90 text-white text-sm font-body rounded-xl transition-all">
+                <Plus size={15} /> Add Manga
+              </button>
+            )}
+          </div>
+
+          {/* ── ACTIVITY LOG ─────────────────────────────────────────────── */}
+          {showLog && mangaList.length > 0 && (
+            <div className="glass rounded-2xl p-5 mb-5 border border-purple-500/15">
+              <div className="flex items-center gap-2 mb-4">
+                <div className="w-7 h-7 rounded-lg bg-purple-500/20 border border-purple-500/30 flex items-center justify-center">
+                  <CalendarDays size={13} className="text-purple-400" />
+                </div>
+                <h3 className="font-display text-sm text-white tracking-widest uppercase">Recently Added Log</h3>
+                <span className="ml-auto text-xs text-text-muted font-body">{mangaList.length} manual entries</span>
+              </div>
+              <div className="flex flex-col gap-1 max-h-72 overflow-y-auto pr-1">
+                {[...mangaList]
+                  .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+                  .map(manga => {
+                    const d = new Date(manga.createdAt)
+                    const dateStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                    const timeStr = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+                    const isToday = new Date().toDateString() === d.toDateString()
+                    return (
+                      <div key={manga._id} className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-white/5 transition-colors group">
+                        <div className="flex-shrink-0 w-5 h-5 rounded-full bg-amber-500/20 border border-amber-500/30 flex items-center justify-center">
+                          <div className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                        </div>
+                        <img src={manga.coverUrl} alt="" className="w-7 h-9 object-cover rounded-lg flex-shrink-0 opacity-80 group-hover:opacity-100 transition-opacity"
+                          onError={e => (e.currentTarget.src = 'https://placehold.co/28x36/1a1a2e/white?text=?')} />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm text-text font-body truncate">{manga.title}</p>
+                          <p className="text-xs text-text-muted font-body">{manga.author || 'Unknown author'} · {manga.status}</p>
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          {isToday
+                            ? <span className="text-xs px-2 py-0.5 bg-emerald-500/20 text-emerald-400 rounded-full font-body">Today</span>
+                            : <span className="text-xs text-text-muted font-body">{dateStr}</span>}
+                          <p className="text-xs text-text-muted font-body mt-0.5 opacity-60">{timeStr}</p>
+                        </div>
                       </div>
-                      <p className="text-xs text-text-muted font-body mt-0.5">
-                        {manga.status} · {manga.genres.slice(0, 3).join(', ')} · {manga.views} views
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      <button onClick={() => setShowChapterForm(manga._id)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 bg-accent/20 border border-accent/30 text-accent text-xs font-body rounded-lg hover:bg-accent/30 transition-colors">
-                        <Plus size={12} /> Chapter
-                      </button>
-                      <button onClick={() => { setEditingManga(manga); setShowMangaForm(true) }}
-                        className="p-2 glass rounded-lg text-text-muted hover:text-text transition-colors">
-                        <Edit3 size={14} />
-                      </button>
-                      <button onClick={() => deleteManga(manga._id)}
-                        className="p-2 glass rounded-lg text-text-muted hover:text-red-400 transition-colors">
-                        <Trash2 size={14} />
-                      </button>
-                      <button onClick={() => toggleExpand(manga._id)}
-                        className="p-2 glass rounded-lg text-text-muted hover:text-text transition-colors">
-                        {expandedManga === manga._id ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                      </button>
+                    )
+                  })}
+              </div>
+            </div>
+          )}
+
+          {/* ── MANGADEX API LIST ─────────────────────────────────────────── */}
+          {mangaSource !== 'local' && (
+            <div className="mb-6">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="w-2 h-2 rounded-full bg-blue-400" />
+                <span className="text-xs font-body text-blue-400 uppercase tracking-widest font-semibold">MangaDex API</span>
+                <span className="text-xs text-text-muted font-body ml-1">— {apiTotal.toLocaleString()} titles on your site</span>
+              </div>
+              {loadingApi ? (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  {[...Array(8)].map((_, i) => <div key={i} className="skeleton h-52 rounded-xl" />)}
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                    {apiManga.map(m => {
+                      const title = getMangaTitle(m)
+                      const cover = getCoverUrl(m, 256)
+                      const tags = getMangaTags(m).slice(0, 2)
+                      const status = m.attributes.status
+                      return (
+                        <div key={m.id} className="glass rounded-xl overflow-hidden group hover:ring-1 hover:ring-blue-400/30 transition-all">
+                          <div className="relative">
+                            <img src={cover} alt={title} className="w-full h-36 object-cover"
+                              onError={e => (e.currentTarget.src = 'https://placehold.co/120x180/1a1a2e/white?text=No+Cover')} />
+                            <div className="absolute top-1.5 left-1.5">
+                              <span className="text-[9px] px-1.5 py-0.5 bg-blue-500/80 text-white rounded font-body backdrop-blur-sm">MangaDex</span>
+                            </div>
+                            <div className="absolute top-1.5 right-1.5">
+                              <span className="text-[9px] px-1.5 py-0.5 rounded font-body backdrop-blur-sm"
+                                style={{ background: `${STATUS_COLORS[status]}cc`, color: '#fff' }}>{status}</span>
+                            </div>
+                          </div>
+                          <div className="p-2">
+                            <p className="text-xs text-text font-body line-clamp-2 leading-tight mb-1">{title}</p>
+                            <p className="text-[10px] text-text-muted font-body truncate">{tags.join(', ') || '—'}</p>
+                            {m.attributes.year && <p className="text-[10px] text-text-muted font-body opacity-50">{m.attributes.year}</p>}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                  {/* Pagination */}
+                  <div className="flex items-center justify-between mt-4">
+                    <span className="text-xs text-text-muted font-body">
+                      Showing {apiPage * 24 + 1}–{Math.min((apiPage + 1) * 24, apiTotal)} of {apiTotal.toLocaleString()}
+                    </span>
+                    <div className="flex gap-2">
+                      <button disabled={apiPage === 0} onClick={() => setApiPage(p => p - 1)}
+                        className="px-3 py-1.5 glass rounded-lg text-xs font-body text-text-muted hover:text-text disabled:opacity-30 transition-colors">← Prev</button>
+                      <button disabled={(apiPage + 1) * 24 >= apiTotal} onClick={() => setApiPage(p => p + 1)}
+                        className="px-3 py-1.5 glass rounded-lg text-xs font-body text-text-muted hover:text-text disabled:opacity-30 transition-colors">Next →</button>
                     </div>
                   </div>
-                  {expandedManga === manga._id && (
-                    <div className="border-t border-white/5 bg-black/20 p-4">
-                      <div className="flex items-center justify-between mb-3">
-                        <p className="text-xs text-text-muted font-body uppercase tracking-widest">Chapters ({chapters[manga._id]?.length || 0})</p>
-                        <button onClick={() => setShowChapterForm(manga._id)}
-                          className="flex items-center gap-1 text-xs text-accent hover:underline font-body">
-                          <Plus size={11} /> Add Chapter
-                        </button>
-                      </div>
-                      {!chapters[manga._id] ? (
-                        <p className="text-xs text-text-muted font-body">Loading...</p>
-                      ) : chapters[manga._id].length === 0 ? (
-                        <p className="text-xs text-text-muted font-body">No chapters yet.</p>
-                      ) : (
-                        <div className="flex flex-col gap-2">
-                          {chapters[manga._id].map(ch => (
-                            <div key={ch._id} className="flex items-center justify-between bg-white/5 rounded-xl px-4 py-2.5">
-                              <div>
-                                <span className="text-sm text-text font-body">
-                                  {ch.volume && `Vol.${ch.volume} `}Ch.{ch.chapterNumber}
-                                  {ch.title && <span className="text-text-muted"> — {ch.title}</span>}
-                                </span>
-                                <span className="ml-3 text-xs text-text-muted">{ch.pages.length} pages</span>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* ── LOCALLY ADDED LIST ────────────────────────────────────────── */}
+          {mangaSource !== 'api' && (
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                <div className="w-2 h-2 rounded-full bg-amber-400" />
+                <span className="text-xs font-body text-amber-400 uppercase tracking-widest font-semibold">Manually Added</span>
+                <span className="text-xs text-text-muted font-body ml-1">— {mangaList.length} title{mangaList.length !== 1 ? 's' : ''} you uploaded</span>
+              </div>
+              {loadingData ? (
+                <div className="flex flex-col gap-3">{[1,2,3].map(i => <div key={i} className="skeleton h-20 rounded-xl" />)}</div>
+              ) : mangaList.length === 0 ? (
+                <div className="text-center py-16 glass rounded-2xl">
+                  <BookOpen size={40} className="text-text-muted mx-auto mb-3 opacity-30" />
+                  <p className="font-body text-text-muted mb-4">No manga manually added yet.</p>
+                  <button onClick={() => { setEditingManga(null); setShowMangaForm(true) }}
+                    className="px-5 py-2.5 bg-primary text-white font-body text-sm rounded-xl">Add Your First Manga</button>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-3">
+                  {[...mangaList]
+                    .sort((a, b) => {
+                      if (sortBy === 'newest') return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+                      if (sortBy === 'oldest') return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+                      if (sortBy === 'title-az') return a.title.localeCompare(b.title)
+                      if (sortBy === 'title-za') return b.title.localeCompare(a.title)
+                      if (sortBy === 'most-views') return b.views - a.views
+                      return 0
+                    })
+                    .map(manga => {
+                      const addedDate = new Date(manga.createdAt)
+                      const isToday = new Date().toDateString() === addedDate.toDateString()
+                      const dateLabel = isToday ? 'Added today' : `Added ${addedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+                      return (
+                        <div key={manga._id} className={`glass rounded-2xl overflow-hidden transition-all duration-700 ${newlyDetected.has(manga._id) ? 'ring-1 ring-emerald-400/40 bg-emerald-500/5' : ''}`}>
+                          <div className="flex items-center gap-4 p-4">
+                            <div className="relative flex-shrink-0">
+                              <img src={manga.coverUrl} alt={manga.title} className="w-12 h-16 object-cover rounded-xl"
+                                onError={e => (e.currentTarget.src = 'https://placehold.co/48x64/1a1a2e/white?text=No+Cover')} />
+                              <span className="absolute -top-1 -left-1 text-[8px] px-1 py-0.5 bg-amber-500/90 text-white rounded font-body">Manual</span>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <h3 className="font-body text-text font-medium line-clamp-1">{manga.title}</h3>
+                                {manga.featured && <span className="text-xs px-2 py-0.5 bg-amber-500/20 text-amber-400 rounded-full">Featured</span>}
+                                {newlyDetected.has(manga._id) && (
+                                  <span className="text-[10px] px-2 py-0.5 bg-emerald-500/20 text-emerald-400 rounded-full font-body animate-pulse">● NEW</span>
+                                )}
                               </div>
-                              <div className="flex items-center gap-2">
-                                <Link to={`/read/local/${ch._id}`} className="text-xs text-accent hover:underline font-body">Preview</Link>
-                                <button onClick={() => deleteChapter(manga._id, ch._id)}
-                                  className="p-1 text-text-muted hover:text-red-400 transition-colors">
-                                  <Trash2 size={12} />
-                                </button>
+                              <p className="text-xs text-text-muted font-body mt-0.5">
+                                {manga.status} · {manga.genres.slice(0, 3).join(', ')} · {manga.views} views
+                              </p>
+                              <div className="flex items-center gap-1 mt-1">
+                                <Clock size={10} className={isToday ? 'text-emerald-400' : 'text-text-muted'} />
+                                <span className={`text-xs font-body ${isToday ? 'text-emerald-400' : 'text-text-muted opacity-60'}`}>{dateLabel}</span>
                               </div>
                             </div>
-                          ))}
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              <button onClick={() => setShowChapterForm(manga._id)}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-accent/20 border border-accent/30 text-accent text-xs font-body rounded-lg hover:bg-accent/30 transition-colors">
+                                <Plus size={12} /> Chapter
+                              </button>
+                              <button onClick={() => { setEditingManga(manga); setShowMangaForm(true) }}
+                                className="p-2 glass rounded-lg text-text-muted hover:text-text transition-colors">
+                                <Edit3 size={14} />
+                              </button>
+                              <button onClick={() => deleteManga(manga._id)}
+                                className="p-2 glass rounded-lg text-text-muted hover:text-red-400 transition-colors">
+                                <Trash2 size={14} />
+                              </button>
+                              <button onClick={() => toggleExpand(manga._id)}
+                                className="p-2 glass rounded-lg text-text-muted hover:text-text transition-colors">
+                                {expandedManga === manga._id ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                              </button>
+                            </div>
+                          </div>
+                          {expandedManga === manga._id && (
+                            <div className="border-t border-white/5 bg-black/20 p-4">
+                              <div className="flex items-center justify-between mb-3">
+                                <p className="text-xs text-text-muted font-body uppercase tracking-widest">Chapters ({chapters[manga._id]?.length || 0})</p>
+                                <button onClick={() => setShowChapterForm(manga._id)} className="flex items-center gap-1 text-xs text-accent hover:underline font-body">
+                                  <Plus size={11} /> Add Chapter
+                                </button>
+                              </div>
+                              {!chapters[manga._id] ? (
+                                <p className="text-xs text-text-muted font-body">Loading...</p>
+                              ) : chapters[manga._id].length === 0 ? (
+                                <p className="text-xs text-text-muted font-body">No chapters yet.</p>
+                              ) : (
+                                <div className="flex flex-col gap-2">
+                                  {chapters[manga._id].map(ch => (
+                                    <div key={ch._id} className="flex items-center justify-between bg-white/5 rounded-xl px-4 py-2.5">
+                                      <div>
+                                        <span className="text-sm text-text font-body">
+                                          {ch.volume && `Vol.${ch.volume} `}Ch.{ch.chapterNumber}
+                                          {ch.title && <span className="text-text-muted"> — {ch.title}</span>}
+                                        </span>
+                                        <span className="ml-3 text-xs text-text-muted">{ch.pages.length} pages</span>
+                                      </div>
+                                      <div className="flex items-center gap-2">
+                                        <Link to={`/read/local/${ch._id}`} className="text-xs text-accent hover:underline font-body">Preview</Link>
+                                        <button onClick={() => deleteChapter(manga._id, ch._id)} className="p-1 text-text-muted hover:text-red-400 transition-colors">
+                                          <Trash2 size={12} />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </div>
-                  )}
+                      )
+                    })}
                 </div>
-              ))}
+              )}
             </div>
           )}
         </div>
@@ -387,9 +702,8 @@ export default function Admin() {
                 ))}
               </div>
 
-              {/* Reading Activity + User Growth — side by side */}
+              {/* Reading Activity + User Growth */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Reading Activity */}
                 <div className="glass rounded-2xl p-5">
                   <h3 className="font-display text-sm text-white tracking-widest mb-4 uppercase">Reading Activity (30d)</h3>
                   <ResponsiveContainer width="100%" height={180}>
@@ -401,17 +715,14 @@ export default function Admin() {
                         </linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                      <XAxis dataKey="date" tick={{ fill: '#6b7280', fontSize: 10 }} tickLine={false}
-                        interval={6} axisLine={false} />
+                      <XAxis dataKey="date" tick={{ fill: '#6b7280', fontSize: 10 }} tickLine={false} interval={6} axisLine={false} />
                       <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} tickLine={false} axisLine={false} allowDecimals={false} />
                       <Tooltip {...TooltipStyle} />
-                      <Area type="monotone" dataKey="reads" stroke="#e8394d" strokeWidth={2}
-                        fill="url(#readsGrad)" dot={false} />
+                      <Area type="monotone" dataKey="reads" stroke="#e8394d" strokeWidth={2} fill="url(#readsGrad)" dot={false} />
                     </AreaChart>
                   </ResponsiveContainer>
                 </div>
 
-                {/* User Growth */}
                 <div className="glass rounded-2xl p-5">
                   <h3 className="font-display text-sm text-white tracking-widest mb-4 uppercase">New Users (30d)</h3>
                   <ResponsiveContainer width="100%" height={180}>
@@ -423,12 +734,10 @@ export default function Admin() {
                         </linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                      <XAxis dataKey="date" tick={{ fill: '#6b7280', fontSize: 10 }} tickLine={false}
-                        interval={6} axisLine={false} />
+                      <XAxis dataKey="date" tick={{ fill: '#6b7280', fontSize: 10 }} tickLine={false} interval={6} axisLine={false} />
                       <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} tickLine={false} axisLine={false} allowDecimals={false} />
                       <Tooltip {...TooltipStyle} />
-                      <Area type="monotone" dataKey="count" stroke="#7c6af7" strokeWidth={2}
-                        fill="url(#userGrad)" dot={false} />
+                      <Area type="monotone" dataKey="count" stroke="#7c6af7" strokeWidth={2} fill="url(#userGrad)" dot={false} />
                     </AreaChart>
                   </ResponsiveContainer>
                 </div>
@@ -444,8 +753,7 @@ export default function Admin() {
                     <BarChart data={analytics.topManga} layout="vertical" margin={{ left: 8, right: 24 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" horizontal={false} />
                       <XAxis type="number" tick={{ fill: '#6b7280', fontSize: 10 }} tickLine={false} axisLine={false} />
-                      <YAxis type="category" dataKey="title" tick={{ fill: '#9ca3af', fontSize: 11 }}
-                        tickLine={false} axisLine={false} width={100} />
+                      <YAxis type="category" dataKey="title" tick={{ fill: '#9ca3af', fontSize: 11 }} tickLine={false} axisLine={false} width={100} />
                       <Tooltip {...TooltipStyle} formatter={(v) => [v, 'Views']} />
                       <Bar dataKey="views" radius={[0, 6, 6, 0]}>
                         {analytics.topManga.map((_, i) => (
@@ -459,7 +767,6 @@ export default function Admin() {
 
               {/* Genre Distribution + Status Breakdown */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Genre pie */}
                 <div className="glass rounded-2xl p-5">
                   <h3 className="font-display text-sm text-white tracking-widest mb-4 uppercase">Genre Distribution</h3>
                   {analytics.genreData.length === 0 ? (
@@ -468,8 +775,7 @@ export default function Admin() {
                     <div className="flex items-center gap-4">
                       <ResponsiveContainer width="55%" height={180}>
                         <PieChart>
-                          <Pie data={analytics.genreData} cx="50%" cy="50%" innerRadius={45} outerRadius={75}
-                            dataKey="value" paddingAngle={3}>
+                          <Pie data={analytics.genreData} cx="50%" cy="50%" innerRadius={45} outerRadius={75} dataKey="value" paddingAngle={3}>
                             {analytics.genreData.map((_, i) => (
                               <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
                             ))}
@@ -492,7 +798,6 @@ export default function Admin() {
                   )}
                 </div>
 
-                {/* Status breakdown */}
                 <div className="glass rounded-2xl p-5">
                   <h3 className="font-display text-sm text-white tracking-widest mb-4 uppercase">Status Breakdown</h3>
                   {analytics.statusData.length === 0 ? (
